@@ -26,7 +26,7 @@ This userscript integrates seamlessly with Torn.com to provide faction members w
 - **Auto-Hide Full Attacks**: Automatically removes full attacks from the feed (configurable)
 
 ### Attack Creation
-When viewing a target on the attack page (`https://www.torn.com/loader.php`), if the target is in your faction's war room target list, you can create a coordinated attack with:
+When viewing a target's attack page (via `https://www.torn.com/loader.php`), if the target is in your faction's war room target list, you can create a coordinated attack with:
 - Custom number of participants (1-30)
 - Expiration time (1-15 minutes)
 - Option to wait until full before showing attack link
@@ -98,7 +98,7 @@ Access the settings panel to configure:
 ## 📖 Usage
 
 ### Viewing Coordinated Attacks
-1. Navigate to the Factions page (`/factions.php`)
+1. Navigate to the Factions page (`https://www.torn.com/factions.php`)
 2. Active coordinated attacks will appear as toast notifications in the bottom-left corner
 3. Each attack card shows:
    - Target information
@@ -113,8 +113,8 @@ Access the settings panel to configure:
 4. Once joined, you'll see the "Attack" button to access the target
 
 ### Creating a Coordinated Attack
-1. Navigate to a target's attack page using loader.php
-2. If the target is in your faction's war room list, a green plus button appears
+1. Navigate to attack a target via the attack interface (which uses loader.php)
+2. If the target is in your faction's war room list, a green plus button appears in the bottom-left
 3. Click the button to open the attack creation dialog
 4. Configure the attack parameters:
    - Number of participants needed
