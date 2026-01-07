@@ -26,7 +26,7 @@ This userscript integrates seamlessly with Torn.com to provide faction members w
 - **Auto-Hide Full Attacks**: Automatically removes full attacks from the feed (configurable)
 
 ### Attack Creation
-When viewing a target on the attack page (loader.php), if the target is in your faction's war room target list, you can create a coordinated attack with:
+When viewing a target on the attack page (`https://www.torn.com/loader.php`), if the target is in your faction's war room target list, you can create a coordinated attack with:
 - Custom number of participants (1-30)
 - Expiration time (1-15 minutes)
 - Option to wait until full before showing attack link
@@ -139,9 +139,10 @@ Access the settings panel to configure:
 - `GM_getValue` / `GM_setValue`: Store settings and authentication tokens
 - Connection to `api.torn.zzcraft.net`: WarRoom service API
 
-### Page Matches
-- `https://www.torn.com/loader.php*` - Attack pages for target detection and attack creation
-- `https://www.torn.com/factions.php*` - Faction pages for attack feed display
+### Matched Pages
+The script automatically runs on:
+- `https://www.torn.com/loader.php*` - Attack pages for target detection and coordinated attack creation
+- `https://www.torn.com/factions.php*` - Faction pages where the attack feed is displayed
 
 ### Architecture
 - **SignalR Long Polling**: Custom implementation for real-time communication
@@ -195,7 +196,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 👤 Author
 
-**TuRzAm**
+**TuRzAm** (GitHub: [@TuRz4m](https://github.com/TuRz4m))
 - Website: [torn.zzcraft.net](https://torn.zzcraft.net/)
 
 ## 🔗 Related Links
