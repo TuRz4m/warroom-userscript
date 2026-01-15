@@ -3,7 +3,7 @@
 // @description  Connect to the TuRzAm WarRoom service to receive attack notifications directly within Torn.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.0
+// @version      1.1
 // @match        https://www.torn.com/loader.php*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -12,6 +12,8 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @connect      api.torn.zzcraft.net
+// @updateURL    https://raw.githubusercontent.com/TuRz4m/warroom-userscript/refs/heads/main/warroom-userscript.js
+// @downloadURL  https://raw.githubusercontent.com/TuRz4m/warroom-userscript/refs/heads/main/warroom-userscript.js
 // @require   https://raw.githubusercontent.com/Tampermonkey/utils/refs/heads/main/requires/gh_2215_make_GM_xhr_more_parallel_again.js
 // ==/UserScript==
 
@@ -29,6 +31,7 @@
     attackFeedEnabled: true,
     attackFeedOnLoaderPage: false,
     toastPosition: 'bottom-left',
+    buttonPosition: 'bottom-left',
     toastDuration: 20000,
     soundEnabled: false,
     autoHideFullAttacks: true,
@@ -88,13 +91,34 @@
   GM_addStyle(`
     .wr-toast-container {
       position: fixed;
-      left: 20px;
-      bottom: 70px;
       display: flex;
-      flex-direction: column-reverse;
       gap: 10px;
       z-index: 99999;
       max-width: 320px;
+    }
+
+    .wr-toast-container.bottom-left {
+      left: 20px;
+      bottom: 70px;
+      flex-direction: column-reverse;
+    }
+
+    .wr-toast-container.bottom-right {
+      right: 20px;
+      bottom: 70px;
+      flex-direction: column-reverse;
+    }
+
+    .wr-toast-container.top-left {
+      left: 20px;
+      top: 70px;
+      flex-direction: column;
+    }
+
+    .wr-toast-container.top-right {
+      right: 20px;
+      top: 70px;
+      flex-direction: column;
     }
 
     .wr-toast {
@@ -406,17 +430,15 @@
       to { transform: rotate(360deg); }
     }
 
-    /* Settings button */
-    .wr-settings-btn {
+    /* Button base styles */
+    .wr-settings-btn,
+    .wr-feed-toggle-btn,
+    .wr-attack-btn {
       position: fixed;
-      left: 66px;
-      bottom: 20px;
       width: 36px;
       height: 36px;
       border-radius: 50%;
       background: rgba(30, 30, 50, 0.9);
-      border: 1px solid rgba(155, 89, 182, 0.4);
-      color: #9b59b6;
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -424,6 +446,12 @@
       z-index: 99998;
       transition: all 0.2s ease;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Settings button */
+    .wr-settings-btn {
+      border: 1px solid rgba(155, 89, 182, 0.4);
+      color: #9b59b6;
     }
 
     .wr-settings-btn:hover {
@@ -434,22 +462,8 @@
 
     /* Attack feed toggle button */
     .wr-feed-toggle-btn {
-      position: fixed;
-      left: 20px;
-      bottom: 20px;
-      width: 36px;
-      height: 36px;
-      border-radius: 50%;
-      background: rgba(30, 30, 50, 0.9);
       border: 1px solid rgba(155, 89, 182, 0.4);
       color: #9b59b6;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 99998;
-      transition: all 0.2s ease;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     }
 
     .wr-feed-toggle-btn:hover {
@@ -471,28 +485,78 @@
 
     /* Coordinated attack button */
     .wr-attack-btn {
-      position: fixed;
-      left: 112px;
-      bottom: 20px;
-      width: 36px;
-      height: 36px;
-      border-radius: 50%;
-      background: rgba(30, 30, 50, 0.9);
       border: 1px solid rgba(46, 204, 113, 0.4);
       color: #2ecc71;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 99998;
-      transition: all 0.2s ease;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     }
 
     .wr-attack-btn:hover {
       background: rgba(46, 204, 113, 0.2);
       border-color: #2ecc71;
       transform: scale(1.1);
+    }
+
+    /* Button positions - bottom-left */
+    .wr-feed-toggle-btn.bottom-left {
+      left: 20px;
+      bottom: 20px;
+    }
+
+    .wr-settings-btn.bottom-left {
+      left: 66px;
+      bottom: 20px;
+    }
+
+    .wr-attack-btn.bottom-left {
+      left: 112px;
+      bottom: 20px;
+    }
+
+    /* Button positions - bottom-right */
+    .wr-feed-toggle-btn.bottom-right {
+      right: 20px;
+      bottom: 20px;
+    }
+
+    .wr-settings-btn.bottom-right {
+      right: 66px;
+      bottom: 20px;
+    }
+
+    .wr-attack-btn.bottom-right {
+      right: 112px;
+      bottom: 20px;
+    }
+
+    /* Button positions - top-left */
+    .wr-feed-toggle-btn.top-left {
+      left: 20px;
+      top: 20px;
+    }
+
+    .wr-settings-btn.top-left {
+      left: 66px;
+      top: 20px;
+    }
+
+    .wr-attack-btn.top-left {
+      left: 112px;
+      top: 20px;
+    }
+
+    /* Button positions - top-right */
+    .wr-feed-toggle-btn.top-right {
+      right: 20px;
+      top: 20px;
+    }
+
+    .wr-settings-btn.top-right {
+      right: 66px;
+      top: 20px;
+    }
+
+    .wr-attack-btn.top-right {
+      right: 112px;
+      top: 20px;
     }
 
     /* Settings modal */
@@ -525,6 +589,7 @@
       max-width: 500px;
       max-height: 80vh;
       overflow-y: auto;
+      overflow-x: hidden;
       box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
       animation: wr-slideup 0.3s ease;
     }
@@ -539,14 +604,17 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 1.5rem;
-      padding-bottom: 1rem;
-      border-bottom: 1px solid rgba(155, 89, 182, 0.2);
     }
 
     .wr-modal-title {
       font-size: 1.5rem;
       font-weight: 600;
       color: #fff;
+      line-height: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      margin: 0 !important;
     }
 
     .wr-modal-close {
@@ -554,7 +622,7 @@
       border: none;
       color: #888;
       cursor: pointer;
-      padding: 0.5rem;
+      padding: 0;
       border-radius: 0.5rem;
       font-size: 1.5rem;
       line-height: 1;
@@ -564,6 +632,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      flex-shrink: 0;
     }
 
     .wr-modal-close:hover {
@@ -592,12 +661,19 @@
       color: #fff;
       font-size: 0.9rem;
       transition: all 0.2s;
+      box-sizing: border-box;
     }
 
     .wr-setting-input:focus {
       outline: none;
       border-color: #9b59b6;
       background: rgba(255, 255, 255, 0.08);
+    }
+
+    .wr-setting-input option {
+      background: #1e1e32;
+      color: #fff;
+      padding: 0.5rem;
     }
 
     .wr-setting-toggle {
@@ -706,7 +782,7 @@
 
   // Create toast container (on all pages)
   const toastContainer = document.createElement('div')
-  toastContainer.className = 'wr-toast-container'
+  toastContainer.className = `wr-toast-container ${SETTINGS.toastPosition}`
   document.body.appendChild(toastContainer)
 
   // Toast management
@@ -1615,65 +1691,44 @@
     let detectedTarget = null
     
     if (user2ID) {
-      // Function to fetch faction war rooms and targets
+      // Function to fetch war room targets
       async function checkIfUserIsTarget() {
         try {
           // Check cache first
           let allTargets = getCachedTargets()
-          
-          if (!allTargets) {
-            // Extract factionId from JWT token claims
-            const claims = parseJwtClaims(jwt)
-            const factionId = claims?.FactionId
 
-            if (!factionId) {
-              return
-            }
-            
-            // Fetch faction data to get war rooms
-            const factionRes = await gmFetch(
+          if (!allTargets) {
+            // Fetch all targets from the new unified endpoint
+            const targetsRes = await gmFetch(
               'GET',
-              `${API_BASE}/Factions/${factionId}`,
+              `${API_BASE}/warrooms/targets`,
               {
                 'Authorization': `Bearer ${jwt}`,
               }
             )
-            const factionData = JSON.parse(factionRes.responseText)
-            
-            if (!factionData.warRooms || factionData.warRooms.length === 0) {
-              return
-            }
-            
-            // Fetch targets for each war room
-            allTargets = []
-            for (const warRoom of factionData.warRooms) {
-              const warRoomId = warRoom.warRoomId
-              
-              try {
-                const targetsRes = await gmFetch(
-                  'GET',
-                  `${API_BASE}/WarRooms/${warRoomId}/targets`,
-                  {
-                    'Authorization': `Bearer ${jwt}`,
-                  }
-                )
-                const targets = JSON.parse(targetsRes.responseText)
+            const warRoomTargetsData = JSON.parse(targetsRes.responseText)
 
-                if (targets && targets.length > 0) {
-                  allTargets.push(...targets.map(t => ({ ...t, warRoomId })))
-                }
-              } catch {
-                // Ignore individual war room target fetch errors
+            // Transform the response into a flat list of targets with warRoomId
+            // Response format: [{ warRoomId, targetFaction, targets: [{ userId, userName }] }]
+            allTargets = []
+            for (const warRoomData of warRoomTargetsData) {
+              if (warRoomData.targets && warRoomData.targets.length > 0) {
+                allTargets.push(
+                  ...warRoomData.targets.map(t => ({
+                    ...t,
+                    warRoomId: warRoomData.warRoomId
+                  }))
+                )
               }
             }
-            
+
             // Cache the results
             setCachedTargets(allTargets)
           }
-          
+
           // Check if user2ID is in the target list
           const targetMatch = allTargets.find(t => String(t.userId) === String(user2ID))
-          
+
           if (targetMatch) {
             detectedTarget = targetMatch
             showCoordinatedAttackButton()
@@ -1687,7 +1742,7 @@
       // Function to show coordinated attack button
       function showCoordinatedAttackButton() {
         const attackBtn = document.createElement('button')
-        attackBtn.className = 'wr-attack-btn'
+        attackBtn.className = `wr-attack-btn ${SETTINGS.buttonPosition}`
         attackBtn.title = 'Create Coordinated Attack'
         attackBtn.innerHTML = `
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1887,6 +1942,28 @@
         <div class="wr-setting-desc">Play sound when new attacks are added</div>
       </div>
 
+      <div class="wr-setting-group">
+        <label class="wr-setting-label">Toast Position</label>
+        <select class="wr-setting-input" id="wr-toast-position">
+          <option value="bottom-left" ${SETTINGS.toastPosition === 'bottom-left' ? 'selected' : ''}>Bottom Left</option>
+          <option value="bottom-right" ${SETTINGS.toastPosition === 'bottom-right' ? 'selected' : ''}>Bottom Right</option>
+          <option value="top-left" ${SETTINGS.toastPosition === 'top-left' ? 'selected' : ''}>Top Left</option>
+          <option value="top-right" ${SETTINGS.toastPosition === 'top-right' ? 'selected' : ''}>Top Right</option>
+        </select>
+        <div class="wr-setting-desc">Choose where toast notifications appear on screen</div>
+      </div>
+
+      <div class="wr-setting-group">
+        <label class="wr-setting-label">Button Position</label>
+        <select class="wr-setting-input" id="wr-button-position">
+          <option value="bottom-left" ${SETTINGS.buttonPosition === 'bottom-left' ? 'selected' : ''}>Bottom Left</option>
+          <option value="bottom-right" ${SETTINGS.buttonPosition === 'bottom-right' ? 'selected' : ''}>Bottom Right</option>
+          <option value="top-left" ${SETTINGS.buttonPosition === 'top-left' ? 'selected' : ''}>Top Left</option>
+          <option value="top-right" ${SETTINGS.buttonPosition === 'top-right' ? 'selected' : ''}>Top Right</option>
+        </select>
+        <div class="wr-setting-desc">Choose where control buttons appear on screen</div>
+      </div>
+
       <div class="wr-modal-footer">
         <button class="wr-btn-secondary" id="wr-clear-cache" style="flex: 0.8;">Clear Cache</button>
         <button class="wr-btn-secondary" id="wr-clear-token" style="flex: 0.8;">Clear Token</button>
@@ -1945,7 +2022,8 @@
         autoHideFullAttacks: toggleAutoHide.querySelector('.wr-toggle-switch').classList.contains('active'),
         soundEnabled: toggleSound.querySelector('.wr-toggle-switch').classList.contains('active'),
         urgentThresholdMinutes: 1,
-        toastPosition: SETTINGS.toastPosition,
+        toastPosition: modal.querySelector('#wr-toast-position').value,
+        buttonPosition: modal.querySelector('#wr-button-position').value,
         toastDuration: SETTINGS.toastDuration,
         maxToasts: SETTINGS.maxToasts
       }
@@ -2000,7 +2078,7 @@
    **********************/
   // Settings button
   const settingsBtn = document.createElement('button')
-  settingsBtn.className = 'wr-settings-btn'
+  settingsBtn.className = `wr-settings-btn ${SETTINGS.buttonPosition}`
   settingsBtn.title = 'Settings'
   settingsBtn.innerHTML = `
     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2017,7 +2095,7 @@
   // Attack feed toggle button (not on loader.php)
   if (!window.location.pathname.includes('/loader.php')) {
     const feedToggleBtn = document.createElement('button')
-    feedToggleBtn.className = 'wr-feed-toggle-btn'
+    feedToggleBtn.className = `wr-feed-toggle-btn ${SETTINGS.buttonPosition}`
     feedToggleBtn.innerHTML = `
       <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
