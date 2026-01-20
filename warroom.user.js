@@ -3,7 +3,7 @@
 // @description  Connect to the TuRzAm WarRoom service to receive attack notifications directly within Torn.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.1
+// @version      1.1.1
 // @match        https://www.torn.com/loader.php*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -443,7 +443,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 99998;
+      z-index: 1000001;
       transition: all 0.2s ease;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     }
@@ -772,6 +772,90 @@
       color: #666;
       font-size: 0.75rem;
       margin-top: 0.25rem;
+    }
+
+    /* Ranked War Stats */
+    .wr-rw-limits {
+      background: rgba(20, 20, 35, 0.95);
+      border: 1px solid rgba(155, 89, 182, 0.3);
+      border-radius: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      margin: 0.5rem 0;
+      font-size: 0.8rem;
+      color: #ccc;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .wr-rw-limits-content {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .wr-rw-limits-title {
+      color: #9b59b6;
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+
+    .wr-rw-limits-item {
+      display: inline-block;
+      margin-right: 1rem;
+    }
+
+    .wr-rw-limits-label {
+      color: #888;
+    }
+
+    .wr-rw-limits-value {
+      color: #fff;
+      font-weight: 500;
+    }
+
+    .wr-rw-limits-updated {
+      color: #666;
+      font-size: 0.75rem;
+      font-style: italic;
+      white-space: nowrap;
+    }
+
+    .wr-rw-stat {
+      display: inline-block;
+      font-size: 0.8rem;
+      padding: 0 2px;
+      color: #ccc;
+      margin-right: 0.75rem;
+    }
+
+    .wr-rw-stat:last-child {
+      margin-right: 0;
+    }
+
+    .wr-rw-stat.compliant {
+      color: #2ecc71;
+    }
+
+    .wr-rw-stat.non-compliant {
+      color: #e74c3c;
+      font-weight: 600;
+    }
+
+    .wr-rw-stat-label {
+      color: #888;
+      margin-right: 0.25rem;
+    }
+
+    .wr-rw-stats-container {
+      display: block;
+      background: rgba(155, 89, 182, 0.08);
+      border-top: 1px solid rgba(155, 89, 182, 0.2);
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
     }
   `)
 
@@ -1877,6 +1961,317 @@
       
       // Run the check
       checkIfUserIsTarget()
+    }
+  }
+
+  /**********************
+   * RANKED WAR STATS DISPLAY
+   **********************/
+
+  // Fetch ranked war stats from API
+  let rankedWarStatsCache = null
+  let rankedWarStatsCacheExpiry = 0
+
+  async function fetchRankedWarStats() {
+    if (!isAuthenticated || !jwt) return null
+
+    // Return cached data if still valid
+    if (rankedWarStatsCache && Date.now() < rankedWarStatsCacheExpiry) {
+      return rankedWarStatsCache
+    }
+
+    try {
+      const res = await gmFetch('GET', `${API_BASE}/rankedwars/last`, {
+        'Authorization': `Bearer ${jwt}`
+      })
+      rankedWarStatsCache = JSON.parse(res.responseText)
+
+      // Set cache expiry based on NextUpdate field from response (max 1 hour)
+      const maxCacheMs = 60 * 60 * 1000 // 1 hour
+      if (rankedWarStatsCache.nextUpdate) {
+        const nextUpdateTime = new Date(rankedWarStatsCache.nextUpdate).getTime()
+        rankedWarStatsCacheExpiry = Math.min(nextUpdateTime, Date.now() + maxCacheMs)
+      } else {
+        // Fallback to 1 minute if NextUpdate not provided
+        rankedWarStatsCacheExpiry = Date.now() + 60000
+      }
+
+      return rankedWarStatsCache
+    } catch {
+      return null
+    }
+  }
+
+  // Check compliance against current limits
+  function checkRankedWarCompliance(member, limits) {
+    if (!limits) return { hits: 'neutral', total: 'neutral', avg: 'neutral' }
+
+    const result = { hits: 'neutral', total: 'neutral', avg: 'neutral' }
+    const nbWarHits = member.nbWarHits ?? 0
+    const totalRespect = member.totalRespect ?? 0
+    const averageRespect = member.averageRespect ?? 0
+
+    // Check hits
+    if (limits.minHits != null && nbWarHits < limits.minHits) {
+      result.hits = 'non-compliant'
+    } else if (limits.maxHits != null && nbWarHits > limits.maxHits) {
+      result.hits = 'non-compliant'
+    } else if (limits.minHits != null || limits.maxHits != null) {
+      result.hits = 'compliant'
+    }
+
+    // Check total respect
+    if (limits.minTotalRespect != null && totalRespect < limits.minTotalRespect) {
+      result.total = 'non-compliant'
+    } else if (limits.maxTotalRespect != null && totalRespect > limits.maxTotalRespect) {
+      result.total = 'non-compliant'
+    } else if (limits.minTotalRespect != null || limits.maxTotalRespect != null) {
+      result.total = 'compliant'
+    }
+
+    // Check average respect (only if member has hits)
+    if (limits.averageRespectGoal != null && nbWarHits > 0 && averageRespect < limits.averageRespectGoal) {
+      result.avg = 'non-compliant'
+    } else if (limits.averageRespectGoal != null && nbWarHits > 0) {
+      result.avg = 'compliant'
+    }
+
+    return result
+  }
+
+  // Format relative time (e.g., "2 minutes ago")
+  function formatRelativeTime(dateString) {
+    if (!dateString) return null
+
+    const date = new Date(dateString)
+    if (isNaN(date.getTime())) return null
+
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+
+    // Handle future dates or invalid dates
+    if (diffMs < 0) return 'just now'
+
+    const diffSeconds = Math.floor(diffMs / 1000)
+    const diffMinutes = Math.floor(diffSeconds / 60)
+    const diffHours = Math.floor(diffMinutes / 60)
+    const diffDays = Math.floor(diffHours / 24)
+
+    if (diffSeconds < 60) {
+      return 'just now'
+    } else if (diffMinutes < 60) {
+      return `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''} ago`
+    } else if (diffHours < 24) {
+      return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`
+    } else if (diffDays < 7) {
+      return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`
+    } else {
+      return date.toLocaleDateString()
+    }
+  }
+
+  // Create limits display element
+  function createLimitsDisplay(limits, lastUpdated) {
+    const container = document.createElement('div')
+    container.className = 'wr-rw-limits'
+
+    const relativeTime = formatRelativeTime(lastUpdated)
+    const updatedHtml = relativeTime ? `<span class="wr-rw-limits-updated">Last data update: ${escapeHtml(relativeTime)}</span>` : ''
+
+    if (!limits) {
+      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span><span class="wr-rw-limits-label">No active limits</span></div>${updatedHtml}`
+      return container
+    }
+
+    const items = []
+
+    if (limits.minHits != null || limits.maxHits != null) {
+      const hitsText = limits.minHits != null && limits.maxHits != null
+        ? `${limits.minHits}-${limits.maxHits}`
+        : limits.minHits != null
+          ? `≥${limits.minHits}`
+          : `≤${limits.maxHits}`
+      items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Number of Hits: </span><span class="wr-rw-limits-value">${escapeHtml(hitsText)}</span></span>`)
+    }
+
+    if (limits.minTotalRespect != null || limits.maxTotalRespect != null) {
+      const totalText = limits.minTotalRespect != null && limits.maxTotalRespect != null
+        ? `${limits.minTotalRespect.toFixed(1)}-${limits.maxTotalRespect.toFixed(1)}`
+        : limits.minTotalRespect != null
+          ? `≥${limits.minTotalRespect.toFixed(1)}`
+          : `≤${limits.maxTotalRespect.toFixed(1)}`
+      items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Total Respect: </span><span class="wr-rw-limits-value">${escapeHtml(totalText)}</span></span>`)
+    }
+
+    if (limits.averageRespectGoal != null) {
+      items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Average Respect: </span><span class="wr-rw-limits-value">≥${escapeHtml(limits.averageRespectGoal.toFixed(2))}</span></span>`)
+    }
+
+    container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${updatedHtml}`
+    return container
+  }
+
+  // Add stats to member row and color the points element
+  function addStatsToMemberRow(row, member, limits) {
+    // Check if already added
+    if (row.querySelector('.wr-rw-stats-container')) return
+
+    const compliance = checkRankedWarCompliance(member, limits)
+    const nbWarHits = member.nbWarHits ?? 0
+    const averageRespect = member.averageRespect ?? 0
+
+    // Color the existing .points element based on total respect compliance
+    const pointsEl = row.querySelector('.points')
+    if (pointsEl) {
+      if (compliance.total === 'compliant') {
+        pointsEl.style.color = '#2ecc71'
+      } else if (compliance.total === 'non-compliant') {
+        pointsEl.style.color = '#e74c3c'
+        pointsEl.style.fontWeight = '600'
+      }
+    }
+
+    // Add stats container with hits and average respect
+    const statsContainer = document.createElement('div')
+    statsContainer.className = 'wr-rw-stats-container'
+    statsContainer.innerHTML = `
+      <span class="wr-rw-stat ${escapeHtml(compliance.hits)}"><span class="wr-rw-stat-label">Number of Hits:</span>${escapeHtml(String(nbWarHits))}</span>
+      <span class="wr-rw-stat ${escapeHtml(compliance.avg)}"><span class="wr-rw-stat-label">Average Respect:</span>${escapeHtml(averageRespect.toFixed(2))}</span>
+    `
+
+    row.appendChild(statsContainer)
+  }
+
+  // Extract username from member row
+  function extractUsernameFromRow(row) {
+    // Try .honor-text element first (contains plain text username)
+    const honorText = row.querySelector('.honor-text:not(.honor-text-svg)')
+    if (honorText) {
+      return honorText.textContent.trim()
+    }
+
+    // Fallback: try aria-label on status element
+    const statusEl = row.querySelector('[aria-label*="User "]')
+    if (statusEl) {
+      const match = statusEl.getAttribute('aria-label').match(/User (\S+)/)
+      if (match) return match[1]
+    }
+
+    return null
+  }
+
+  // Main function to enhance ranked war page
+  async function enhanceRankedWarPage() {
+    // Wait for the faction war list to be present
+    const factionWarList = document.getElementById('faction_war_list_id')
+    if (!factionWarList) return
+
+    // Fetch stats from API
+    const statsData = await fetchRankedWarStats()
+    if (!statsData) {
+      return
+    }
+
+    // Create a map of members by name for quick lookup (case-insensitive)
+    const membersByName = new Map()
+    if (statsData.members) {
+      for (const member of statsData.members) {
+        membersByName.set(member.name.toLowerCase(), member)
+      }
+    }
+
+    // Find and enhance the your-faction section
+    const yourFactionSection = document.querySelector('.your-faction')
+    if (!yourFactionSection) return
+
+    // Add limits display below faction-war-info
+    const factionWarInfo = document.querySelector('.faction-war-info')
+    if (factionWarInfo && !document.querySelector('.wr-rw-limits')) {
+      const limitsDisplay = createLimitsDisplay(statsData.currentLimit, statsData.lastUpdated)
+      factionWarInfo.parentNode.insertBefore(limitsDisplay, factionWarInfo.nextSibling)
+    }
+
+    // Find all member rows in your faction
+    const memberRows = yourFactionSection.querySelectorAll('li.your')
+    for (const row of memberRows) {
+      const username = extractUsernameFromRow(row)
+      if (!username) continue
+
+      // Get member data or create default with zeros (case-insensitive lookup)
+      const memberData = membersByName.get(username.toLowerCase()) || {
+        name: username,
+        nbWarHits: 0,
+        totalRespect: 0,
+        averageRespect: 0
+      }
+
+      addStatsToMemberRow(row, memberData, statsData.currentLimit)
+    }
+  }
+
+  // Initialize ranked war enhancement with MutationObserver
+  if (isFactionsPage && window.location.search.includes('step=your')) {
+    let rankedWarEnhanced = false
+    let rankedWarObserver = null
+
+    function setupRankedWarObserver() {
+      if (rankedWarObserver) return
+
+      rankedWarObserver = new MutationObserver(() => {
+        if (rankedWarEnhanced) return
+
+        const factionWarList = document.getElementById('faction_war_list_id')
+        if (factionWarList && window.location.hash.includes('/war/rank')) {
+          rankedWarEnhanced = true
+          rankedWarObserver.disconnect()
+          rankedWarObserver = null
+          enhanceRankedWarPage()
+        }
+      })
+
+      rankedWarObserver.observe(document.body, { childList: true, subtree: true })
+    }
+
+    // Listen for hash changes (SPA navigation)
+    window.addEventListener('hashchange', () => {
+      if (window.location.hash.includes('/war/rank')) {
+        // Reset state for new navigation
+        rankedWarEnhanced = false
+        // Small delay to let DOM update, then try to enhance
+        setTimeout(() => {
+          if (!rankedWarEnhanced) {
+            setupRankedWarObserver()
+            // Also try immediately in case DOM is ready
+            const factionWarList = document.getElementById('faction_war_list_id')
+            if (factionWarList) {
+              rankedWarEnhanced = true
+              if (rankedWarObserver) {
+                rankedWarObserver.disconnect()
+                rankedWarObserver = null
+              }
+              enhanceRankedWarPage()
+            }
+          }
+        }, 500)
+      }
+    })
+
+    // Initial check
+    if (window.location.hash.includes('/war/rank')) {
+      setupRankedWarObserver()
+      setTimeout(() => {
+        if (!rankedWarEnhanced) {
+          const factionWarList = document.getElementById('faction_war_list_id')
+          if (factionWarList) {
+            rankedWarEnhanced = true
+            if (rankedWarObserver) {
+              rankedWarObserver.disconnect()
+              rankedWarObserver = null
+            }
+            enhanceRankedWarPage()
+          }
+        }
+      }, 1000)
     }
   }
 
