@@ -3,7 +3,7 @@
 // @description  Connect to the TuRzAm WarRoom service to receive attack notifications directly within Torn.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.1.1
+// @version      1.1.2
 // @match        https://www.torn.com/loader.php*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -483,6 +483,24 @@
       border-color: #e74c3c;
     }
 
+    .wr-feed-toggle-btn.connecting {
+      background: rgba(30, 30, 50, 0.9);
+      border-color: rgba(243, 156, 18, 0.6);
+      color: #f39c12;
+      animation: wr-pulse-connecting 1.5s infinite;
+    }
+
+    @keyframes wr-pulse-connecting {
+      0%, 100% {
+        opacity: 1;
+        border-color: rgba(243, 156, 18, 0.6);
+      }
+      50% {
+        opacity: 0.7;
+        border-color: rgba(243, 156, 18, 1);
+      }
+    }
+
     /* Coordinated attack button */
     .wr-attack-btn {
       border: 1px solid rgba(46, 204, 113, 0.4);
@@ -822,6 +840,46 @@
       font-size: 0.75rem;
       font-style: italic;
       white-space: nowrap;
+    }
+
+    .wr-rw-refresh-btn {
+      background: none;
+      border: none;
+      color: #9b59b6;
+      cursor: pointer;
+      padding: 2px;
+      margin-left: 0.5rem;
+      opacity: 0.7;
+      transition: all 0.2s;
+      vertical-align: middle;
+      display: inline-flex;
+      align-items: center;
+      min-width: 24px;
+      min-height: 24px;
+      pointer-events: auto;
+    }
+
+    .wr-rw-refresh-btn.disabled {
+      color: #e74c3c;
+      opacity: 0.6;
+    }
+
+    .wr-rw-refresh-btn:hover {
+      opacity: 1;
+      transform: scale(1.1);
+    }
+    
+    .wr-rw-refresh-btn:focus {
+      outline: none;
+    }
+
+    .wr-rw-refresh-btn.loading svg {
+      animation: wr-rw-spin 1s linear infinite;
+    }
+
+    @keyframes wr-rw-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
     }
 
     .wr-rw-stat {
@@ -1357,9 +1415,6 @@
     return false
   }
 
-  // Run initial authentication
-  await ensureAuthenticated()
-
   /**********************
    * CACHE MANAGEMENT
    **********************/
@@ -1760,10 +1815,6 @@
     }
   }
 
-  if (shouldShowFeed && SETTINGS.attackFeedEnabled) {
-    await connectToWarRoom()
-  }
-
   /**********************
    * LOADER.PHP PAGE - TARGET DETECTION
    **********************/
@@ -1971,6 +2022,31 @@
   // Fetch ranked war stats from API
   let rankedWarStatsCache = null
   let rankedWarStatsCacheExpiry = 0
+  let rankedWarAutoRefreshTimeout = null
+  let rankedWarAutoRefreshEnabled = true // Auto-refresh is enabled by default
+
+  // Function to trigger UI refresh for ranked war stats
+  async function triggerRankedWarUIRefresh(isAutoRefresh = false) {
+    // Clear cache to force fresh fetch
+    rankedWarStatsCache = null
+    rankedWarStatsCacheExpiry = 0
+    
+    // Only clear the auto-refresh timeout if this is a manual refresh
+    if (!isAutoRefresh && rankedWarAutoRefreshTimeout) {
+      clearTimeout(rankedWarAutoRefreshTimeout)
+      rankedWarAutoRefreshTimeout = null
+    }
+    
+    // Remove existing stats from member rows
+    document.querySelectorAll('.wr-rw-stats-container').forEach(el => el.remove())
+    // Reset points element colors
+    document.querySelectorAll('.your-faction .points').forEach(el => {
+      el.style.color = ''
+      el.style.fontWeight = ''
+    })
+    // Re-run enhancement which will update the limits display
+    await enhanceRankedWarPage()
+  }
 
   async function fetchRankedWarStats() {
     if (!isAuthenticated || !jwt) return null
@@ -1988,9 +2064,34 @@
 
       // Set cache expiry based on NextUpdate field from response (max 1 hour)
       const maxCacheMs = 60 * 60 * 1000 // 1 hour
+      
       if (rankedWarStatsCache.nextUpdate) {
         const nextUpdateTime = new Date(rankedWarStatsCache.nextUpdate).getTime()
-        rankedWarStatsCacheExpiry = Math.min(nextUpdateTime, Date.now() + maxCacheMs)
+        const now = Date.now()
+        rankedWarStatsCacheExpiry = Math.min(nextUpdateTime, now + maxCacheMs)
+
+        // Schedule auto-refresh 1 second after nextUpdate (only if enabled)
+        if (rankedWarAutoRefreshEnabled) {
+          if (rankedWarAutoRefreshTimeout) {
+            clearTimeout(rankedWarAutoRefreshTimeout)
+          }
+          let refreshDelay = nextUpdateTime - Date.now() + 1000 // 1 second after nextUpdate
+          
+          // If nextUpdate has already passed, schedule immediate refresh (2 seconds from now)
+          if (refreshDelay <= 0) {
+            refreshDelay = 2000 // 2 seconds from now
+          }
+          
+          if (refreshDelay < maxCacheMs) {
+            rankedWarAutoRefreshTimeout = setTimeout(async () => {
+              try {
+                await triggerRankedWarUIRefresh(true)
+              } catch (err) {
+                console.error('Auto-refresh failed:', err)
+              }
+            }, refreshDelay)
+          }
+        }
       } else {
         // Fallback to 1 minute if NextUpdate not provided
         rankedWarStatsCacheExpiry = Date.now() + 60000
@@ -2043,22 +2144,27 @@
   function formatRelativeTime(dateString) {
     if (!dateString) return null
 
-    const date = new Date(dateString)
+    // Normalize timestamps with microsecond precision (6 digits) to milliseconds (3 digits)
+    // e.g., "2026-01-24T21:01:30.088026Z" -> "2026-01-24T21:01:30.088Z"
+    const normalizedDateString = dateString.replace(/\.(\d{3})\d+Z$/, '.$1Z')
+
+    const date = new Date(normalizedDateString)
     if (isNaN(date.getTime())) return null
 
     const now = new Date()
     const diffMs = now.getTime() - date.getTime()
 
-    // Handle future dates or invalid dates
-    if (diffMs < 0) return 'just now'
+    // Handle future dates (clock skew) - treat small future times as "just now"
+    // For larger clock skews, use absolute difference
+    const absDiffMs = Math.abs(diffMs)
 
-    const diffSeconds = Math.floor(diffMs / 1000)
+    const diffSeconds = Math.floor(absDiffMs / 1000)
     const diffMinutes = Math.floor(diffSeconds / 60)
     const diffHours = Math.floor(diffMinutes / 60)
     const diffDays = Math.floor(diffHours / 24)
 
     if (diffSeconds < 60) {
-      return 'just now'
+      return `${diffSeconds} second${diffSeconds !== 1 ? 's' : ''} ago`
     } else if (diffMinutes < 60) {
       return `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''} ago`
     } else if (diffHours < 24) {
@@ -2071,44 +2177,148 @@
   }
 
   // Create limits display element
-  function createLimitsDisplay(limits, lastUpdated) {
+  function createLimitsDisplay(limits, lastUpdated, onRefresh) {
     const container = document.createElement('div')
     container.className = 'wr-rw-limits'
+    updateLimitsDisplayContent(container, limits, lastUpdated, onRefresh)
+    return container
+  }
+
+  // Update limits display content (for refresh without DOM recreation)
+  function updateLimitsDisplayContent(container, limits, lastUpdated, onRefresh) {
+    // Store for later use when toggling auto-refresh
+    container._lastLimits = limits
+    container._lastUpdated = lastUpdated
+    
+    // Clear existing interval if any
+    if (container._limitsUpdateInterval) {
+      clearInterval(container._limitsUpdateInterval)
+      container._limitsUpdateInterval = null
+    }
 
     const relativeTime = formatRelativeTime(lastUpdated)
-    const updatedHtml = relativeTime ? `<span class="wr-rw-limits-updated">Last data update: ${escapeHtml(relativeTime)}</span>` : ''
+    const autoRefreshClass = rankedWarAutoRefreshEnabled ? 'enabled' : 'disabled'
+    const autoRefreshIcon = rankedWarAutoRefreshEnabled 
+      ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 2v6h-6"/>
+          <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+          <path d="M3 22v-6h6"/>
+          <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+          <circle cx="12" cy="12" r="2" fill="currentColor"/>
+        </svg>`
+      : `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 2v6h-6"/>
+          <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+          <path d="M3 22v-6h6"/>
+          <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+          <line x1="2" y1="2" x2="22" y2="22"/>
+        </svg>`
+    const refreshBtnHtml = onRefresh ? `<button class="wr-rw-refresh-btn ${autoRefreshClass}">${autoRefreshIcon}</button>` : ''
+    const updatedHtml = relativeTime ? `<span class="wr-rw-limits-updated">Last data update: ${escapeHtml(relativeTime)}</span>${refreshBtnHtml}` : ''
 
     if (!limits) {
       container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span><span class="wr-rw-limits-label">No active limits</span></div>${updatedHtml}`
-      return container
+    } else {
+      const items = []
+
+      if (limits.minHits != null || limits.maxHits != null) {
+        const hitsText = limits.minHits != null && limits.maxHits != null
+          ? `${limits.minHits}-${limits.maxHits}`
+          : limits.minHits != null
+            ? `≥${limits.minHits}`
+            : `≤${limits.maxHits}`
+        items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Number of Hits: </span><span class="wr-rw-limits-value">${escapeHtml(hitsText)}</span></span>`)
+      }
+
+      if (limits.minTotalRespect != null || limits.maxTotalRespect != null) {
+        const totalText = limits.minTotalRespect != null && limits.maxTotalRespect != null
+          ? `${limits.minTotalRespect.toFixed(1)}-${limits.maxTotalRespect.toFixed(1)}`
+          : limits.minTotalRespect != null
+            ? `≥${limits.minTotalRespect.toFixed(1)}`
+            : `≤${limits.maxTotalRespect.toFixed(1)}`
+        items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Total Respect: </span><span class="wr-rw-limits-value">${escapeHtml(totalText)}</span></span>`)
+      }
+
+      if (limits.averageRespectGoal != null) {
+        items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Average Respect: </span><span class="wr-rw-limits-value">≥${escapeHtml(limits.averageRespectGoal.toFixed(2))}</span></span>`)
+      }
+
+      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${updatedHtml}`
     }
 
-    const items = []
-
-    if (limits.minHits != null || limits.maxHits != null) {
-      const hitsText = limits.minHits != null && limits.maxHits != null
-        ? `${limits.minHits}-${limits.maxHits}`
-        : limits.minHits != null
-          ? `≥${limits.minHits}`
-          : `≤${limits.maxHits}`
-      items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Number of Hits: </span><span class="wr-rw-limits-value">${escapeHtml(hitsText)}</span></span>`)
+    // Set up refresh button click handler
+    if (onRefresh) {
+      const refreshBtn = container.querySelector('.wr-rw-refresh-btn')
+      if (refreshBtn) {
+        // Store the onRefresh function on container to prevent duplicates
+        container._onRefresh = onRefresh
+        
+        refreshBtn.addEventListener('click', async (e) => {
+          // Prevent concurrent refreshes
+          if (container._isRefreshing) return
+          
+          e.preventDefault()
+          e.stopPropagation()
+          
+          // Remove focus
+          if (document.activeElement) {
+            document.activeElement.blur()
+          }
+          refreshBtn.blur()
+          
+          // Toggle auto-refresh state
+          if (rankedWarAutoRefreshEnabled) {
+            // Disable auto-refresh
+            rankedWarAutoRefreshEnabled = false
+            if (rankedWarAutoRefreshTimeout) {
+              clearTimeout(rankedWarAutoRefreshTimeout)
+              rankedWarAutoRefreshTimeout = null
+            }
+            toast('Auto-refresh disabled', 'info')
+            // Update button appearance immediately
+            updateLimitsDisplayContent(container, container._lastLimits, container._lastUpdated, container._onRefresh)
+          } else {
+            // Re-enable auto-refresh and do a manual refresh
+            rankedWarAutoRefreshEnabled = true
+            
+            container._isRefreshing = true
+            refreshBtn.classList.add('loading')
+            
+            try {
+              await container._onRefresh()
+              toast('Auto-refresh enabled', 'success')
+            } catch (err) {
+              console.error('Refresh error:', err)
+            } finally {
+              container._isRefreshing = false
+              // Button will be recreated by update, so no need to remove loading class
+            }
+          }
+        })
+      }
     }
 
-    if (limits.minTotalRespect != null || limits.maxTotalRespect != null) {
-      const totalText = limits.minTotalRespect != null && limits.maxTotalRespect != null
-        ? `${limits.minTotalRespect.toFixed(1)}-${limits.maxTotalRespect.toFixed(1)}`
-        : limits.minTotalRespect != null
-          ? `≥${limits.minTotalRespect.toFixed(1)}`
-          : `≤${limits.maxTotalRespect.toFixed(1)}`
-      items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Total Respect: </span><span class="wr-rw-limits-value">${escapeHtml(totalText)}</span></span>`)
-    }
+    // Set up dynamic time update for "Last data update" timestamp
+    if (lastUpdated) {
+      const updateInterval = setInterval(() => {
+        // Stop updating if element is no longer in DOM
+        if (!container.isConnected) {
+          clearInterval(updateInterval)
+          return
+        }
 
-    if (limits.averageRespectGoal != null) {
-      items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Average Respect: </span><span class="wr-rw-limits-value">≥${escapeHtml(limits.averageRespectGoal.toFixed(2))}</span></span>`)
-    }
+        const updatedSpan = container.querySelector('.wr-rw-limits-updated')
+        if (updatedSpan) {
+          const newRelativeTime = formatRelativeTime(lastUpdated)
+          if (newRelativeTime) {
+            updatedSpan.textContent = `Last data update: ${newRelativeTime}`
+          }
+        }
+      }, 1000)
 
-    container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${updatedHtml}`
-    return container
+      // Store interval ID for cleanup
+      container._limitsUpdateInterval = updateInterval
+    }
   }
 
   // Add stats to member row and color the points element
@@ -2184,11 +2394,68 @@
     const yourFactionSection = document.querySelector('.your-faction')
     if (!yourFactionSection) return
 
-    // Add limits display below faction-war-info
+    // Refresh function to manually update stats
+    const refreshStats = async () => {
+      // Clear cache to force fresh fetch
+      rankedWarStatsCache = null
+      rankedWarStatsCacheExpiry = 0
+      
+      // Fetch fresh stats
+      const freshStatsData = await fetchRankedWarStats()
+      if (!freshStatsData) {
+        toast('Failed to refresh stats', 'error')
+        return
+      }
+      
+      // Update existing limits display instead of removing it
+      const existingLimits = document.querySelector('.wr-rw-limits')
+      if (existingLimits) {
+        updateLimitsDisplayContent(existingLimits, freshStatsData.currentLimit, freshStatsData.lastUpdated, refreshStats)
+      }
+      
+      // Remove existing stats from member rows
+      document.querySelectorAll('.wr-rw-stats-container').forEach(el => el.remove())
+      // Reset points element colors
+      document.querySelectorAll('.your-faction .points').forEach(el => {
+        el.style.color = ''
+        el.style.fontWeight = ''
+      })
+      
+      // Re-add stats to member rows with fresh data
+      const membersByName = new Map()
+      if (freshStatsData.members) {
+        for (const member of freshStatsData.members) {
+          membersByName.set(member.name.toLowerCase(), member)
+        }
+      }
+      
+      const memberRows = yourFactionSection.querySelectorAll('li.your')
+      for (const row of memberRows) {
+        const username = extractUsernameFromRow(row)
+        if (!username) continue
+
+        const memberData = membersByName.get(username.toLowerCase()) || {
+          name: username,
+          nbWarHits: 0,
+          totalRespect: 0,
+          averageRespect: 0
+        }
+
+        addStatsToMemberRow(row, memberData, freshStatsData.currentLimit)
+      }
+    }
+
+    // Add or update limits display below faction-war-info
     const factionWarInfo = document.querySelector('.faction-war-info')
-    if (factionWarInfo && !document.querySelector('.wr-rw-limits')) {
-      const limitsDisplay = createLimitsDisplay(statsData.currentLimit, statsData.lastUpdated)
-      factionWarInfo.parentNode.insertBefore(limitsDisplay, factionWarInfo.nextSibling)
+    let limitsDisplay = document.querySelector('.wr-rw-limits')
+    
+    if (factionWarInfo) {
+      if (!limitsDisplay) {
+        limitsDisplay = createLimitsDisplay(statsData.currentLimit, statsData.lastUpdated, refreshStats)
+        factionWarInfo.parentNode.insertBefore(limitsDisplay, factionWarInfo.nextSibling)
+      } else {
+        updateLimitsDisplayContent(limitsDisplay, statsData.currentLimit, statsData.lastUpdated, refreshStats)
+      }
     }
 
     // Find all member rows in your faction
@@ -2210,6 +2477,7 @@
   }
 
   // Initialize ranked war enhancement with MutationObserver
+  // This runs independently of SignalR connection
   if (isFactionsPage && window.location.search.includes('step=your')) {
     let rankedWarEnhanced = false
     let rankedWarObserver = null
@@ -2225,6 +2493,7 @@
           rankedWarEnhanced = true
           rankedWarObserver.disconnect()
           rankedWarObserver = null
+          // Fetch and display ranked war stats (independent of SignalR)
           enhanceRankedWarPage()
         }
       })
@@ -2488,8 +2757,11 @@
   })
 
   // Attack feed toggle button (not on loader.php)
+  let feedToggleBtn = null
+  let updateFeedToggleState = null
+  
   if (!window.location.pathname.includes('/loader.php')) {
-    const feedToggleBtn = document.createElement('button')
+    feedToggleBtn = document.createElement('button')
     feedToggleBtn.className = `wr-feed-toggle-btn ${SETTINGS.buttonPosition}`
     feedToggleBtn.innerHTML = `
       <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2500,13 +2772,20 @@
     `
     document.body.appendChild(feedToggleBtn)
 
-    // Unified function to update button state based on settings
-    const updateFeedToggleState = () => {
+    // Unified function to update button state based on settings and connection status
+    updateFeedToggleState = (status = 'idle') => {
       const cross = feedToggleBtn.querySelector('.wr-bell-cross')
       
-      if (SETTINGS.attackFeedEnabled) {
+      // Remove all state classes
+      feedToggleBtn.classList.remove('disabled', 'connecting')
+      
+      if (status === 'connecting') {
+        // Connecting state: pulsing orange bell
+        feedToggleBtn.classList.add('connecting')
+        feedToggleBtn.title = 'Connecting to WarRoom...'
+        if (cross) cross.style.display = 'none'
+      } else if (SETTINGS.attackFeedEnabled) {
         // Enabled state: purple bell, no cross
-        feedToggleBtn.classList.remove('disabled')
         feedToggleBtn.title = 'Attack Feed: ON (click to disable)'
         if (cross) cross.style.display = 'none'
       } else {
@@ -2524,17 +2803,134 @@
       SETTINGS.attackFeedEnabled = !SETTINGS.attackFeedEnabled
       saveSettings(SETTINGS)
       
-      // Update button state immediately
-      updateFeedToggleState()
-      
       if (SETTINGS.attackFeedEnabled) {
+        // Show connecting state
+        updateFeedToggleState('connecting')
+        
         // Connect to WarRoom if on factions page
         if (isFactionsPage) {
           await connectToWarRoom()
         }
+        
+        // Update to connected state
+        updateFeedToggleState()
       } else {
         // Disconnect from WarRoom
         disconnectFromWarRoom()
+        
+        // Update button state immediately
+        updateFeedToggleState()
+      }
+    })
+  }
+
+  /**********************
+   * INITIALIZE RANKED WAR OBSERVER (independent of SignalR)
+   **********************/
+  // Global promise lock to prevent duplicate ranked war enhancement calls
+  let rankedWarEnhancementInProgress = null
+  let rankedWarObserverGlobal = null
+
+  function tryEnhanceRankedWar() {
+    const factionWarList = document.getElementById('faction_war_list_id')
+    if (!factionWarList || !window.location.hash.includes('/war/rank')) {
+      return Promise.resolve(false)
+    }
+    
+    // If already in progress, return the existing promise (no log spam)
+    if (rankedWarEnhancementInProgress) {
+      return rankedWarEnhancementInProgress
+    }
+    
+    // Disconnect observer immediately to prevent spam
+    if (rankedWarObserverGlobal) {
+      rankedWarObserverGlobal.disconnect()
+      rankedWarObserverGlobal = null
+    }
+    
+    // Create and set lock synchronously - DO NOT call enhanceRankedWarPage outside the promise chain
+    const enhancePromise = (async () => {
+      try {
+        await enhanceRankedWarPage()
+        return true
+      } catch (err) {
+        console.error('Ranked war enhancement failed:', err)
+        // On error, allow retry
+        rankedWarEnhancementInProgress = null
+        return false
+      }
+    })()
+    
+    // Set lock before returning
+    rankedWarEnhancementInProgress = enhancePromise
+    return enhancePromise
+  }
+
+  // Set up ranked war enhancement immediately, independent of authentication/connection
+  if (isFactionsPage && window.location.search.includes('step=your')) {
+    function setupRankedWarObserver() {
+      if (rankedWarObserverGlobal) return
+
+      rankedWarObserverGlobal = new MutationObserver(() => {
+        tryEnhanceRankedWar()
+      })
+
+      rankedWarObserverGlobal.observe(document.body, { childList: true, subtree: true })
+    }
+
+    // Listen for hash changes (SPA navigation)
+    window.addEventListener('hashchange', () => {
+      if (window.location.hash.includes('/war/rank')) {
+        // Reset state for new navigation
+        rankedWarEnhancementInProgress = null
+        // Small delay to let DOM update, then try to enhance
+        setTimeout(() => {
+          tryEnhanceRankedWar().then(success => {
+            if (!success) {
+              setupRankedWarObserver()
+            }
+          })
+        }, 500)
+      }
+    })
+
+    // Initial check
+    if (window.location.hash.includes('/war/rank')) {
+      // Try immediate enhancement first
+      tryEnhanceRankedWar().then(success => {
+        if (!success) {
+          // If not ready, set up observer and delayed check
+          setupRankedWarObserver()
+          setTimeout(tryEnhanceRankedWar, 1000)
+        }
+      })
+    }
+  }
+
+  /**********************
+   * INITIALIZE API CONNECTIONS AFTER UI CREATION
+   **********************/
+  // Authenticate once upfront
+  await ensureAuthenticated()
+
+  // Start SignalR connection (non-blocking)
+  // Ranked war enhancement is handled by MutationObserver above
+  if (shouldShowFeed && SETTINGS.attackFeedEnabled) {
+    // Show connecting state
+    if (updateFeedToggleState) {
+      updateFeedToggleState('connecting')
+    }
+    
+    // Start SignalR connection without blocking
+    connectToWarRoom().then(() => {
+      // Update button to connected state when SignalR finishes
+      if (updateFeedToggleState) {
+        updateFeedToggleState()
+      }
+    }).catch(() => {
+      // Update button even if connection fails
+      if (updateFeedToggleState) {
+        updateFeedToggleState()
       }
     })
   }

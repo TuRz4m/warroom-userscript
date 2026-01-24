@@ -3,7 +3,7 @@
 // @description  Warroom connector script for TornPDA users. Connects to WarRoomHub via PDA's HTTP API.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.1.0
+// @version      1.1.2
 // @match        https://www.torn.com/*
 // @grant        none
 // ==/UserScript==
@@ -1307,6 +1307,50 @@
       white-space: nowrap;
     }
 
+    .wr-rw-refresh-btn {
+      background: none;
+      border: none;
+      color: #9b59b6;
+      cursor: pointer;
+      padding: 4px;
+      margin-left: 0.5rem;
+      opacity: 0.7;
+      transition: all 0.2s;
+      vertical-align: middle;
+      display: inline-flex;
+      align-items: center;
+      min-width: 24px;
+      min-height: 24px;
+      pointer-events: auto;
+    }
+
+    .wr-rw-refresh-btn.disabled {
+      color: #e74c3c;
+      opacity: 0.6;
+    }
+
+    .wr-rw-refresh-btn:hover {
+      opacity: 1;
+    }
+
+    .wr-rw-refresh-btn:active {
+      opacity: 1;
+      transform: scale(0.95);
+    }
+    
+    .wr-rw-refresh-btn:focus {
+      outline: none;
+    }
+
+    .wr-rw-refresh-btn.loading svg {
+      animation: wr-spin 1s linear infinite;
+    }
+
+    @keyframes wr-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
     .wr-rw-stat {
       display: inline-block;
       font-size: 0.8rem;
@@ -2001,6 +2045,35 @@
   // Fetch ranked war stats from API
   let rankedWarStatsCache = null
   let rankedWarStatsCacheExpiry = 0
+  let rankedWarAutoRefreshTimeout = null
+  let rankedWarAutoRefreshEnabled = true // Auto-refresh is enabled by default
+
+  // Function to trigger UI refresh for ranked war stats
+  async function triggerRankedWarUIRefresh(isAutoRefresh = false) {
+    log('RankedWar', `UI refresh triggered (${isAutoRefresh ? 'auto' : 'manual'})`)
+    
+    // Clear cache to force fresh fetch
+    rankedWarStatsCache = null
+    rankedWarStatsCacheExpiry = 0
+    
+    // Only clear the auto-refresh timeout if this is a manual refresh
+    // Let auto-refresh set up the next one naturally
+    if (!isAutoRefresh && rankedWarAutoRefreshTimeout) {
+      clearTimeout(rankedWarAutoRefreshTimeout)
+      rankedWarAutoRefreshTimeout = null
+    }
+    
+    // Remove existing stats from member rows
+    document.querySelectorAll('.wr-rw-stats-container').forEach(el => el.remove())
+    // Reset points element colors
+    document.querySelectorAll('.your-faction .points').forEach(el => {
+      el.style.color = ''
+      el.style.fontWeight = ''
+    })
+    
+    // Re-run enhancement which will update the limits display
+    await enhanceRankedWarPage()
+  }
 
   async function fetchRankedWarStats() {
     if (!jwt) {
@@ -2009,13 +2082,14 @@
     }
 
     // Return cached data if still valid
-    if (rankedWarStatsCache && Date.now() < rankedWarStatsCacheExpiry) {
-      log('RankedWar', 'Using cached stats')
+    const now = Date.now()
+    if (rankedWarStatsCache && now < rankedWarStatsCacheExpiry) {
+      log('RankedWar', `Using cached stats (expires in ${Math.round((rankedWarStatsCacheExpiry - now) / 1000)}s)`)
       return rankedWarStatsCache
     }
 
     try {
-      log('RankedWar', 'Fetching stats from API')
+      log('RankedWar', 'Fetching fresh stats from API')
       const res = await pdaFetch('GET', `${API_BASE}/rankedwars/last`, {
         'Authorization': `Bearer ${jwt}`
       })
@@ -2023,10 +2097,42 @@
 
       // Set cache expiry based on NextUpdate field from response (max 1 hour)
       const maxCacheMs = 60 * 60 * 1000 // 1 hour
+      
       if (rankedWarStatsCache.nextUpdate) {
         const nextUpdateTime = new Date(rankedWarStatsCache.nextUpdate).getTime()
-        rankedWarStatsCacheExpiry = Math.min(nextUpdateTime, Date.now() + maxCacheMs)
+        const now = Date.now()
+        rankedWarStatsCacheExpiry = Math.min(nextUpdateTime, now + maxCacheMs)
+
+        // Schedule auto-refresh 1 second after nextUpdate (only if on factions page AND enabled)
+        if (rankedWarAutoRefreshEnabled && isFactionsPage && window.location.search.includes('step=your')) {
+          if (rankedWarAutoRefreshTimeout) {
+            clearTimeout(rankedWarAutoRefreshTimeout)
+          }
+          let refreshDelay = nextUpdateTime - Date.now() + 1000 // 1 second after nextUpdate
+          
+          // If nextUpdate has already passed, schedule immediate refresh (2 seconds from now)
+          if (refreshDelay <= 0) {
+            refreshDelay = 2000 // 2 seconds from now
+          }
+          
+          if (refreshDelay < maxCacheMs) {
+            log('RankedWar', `Scheduling auto-refresh in ${Math.round(refreshDelay / 1000)}s`)
+            rankedWarAutoRefreshTimeout = setTimeout(async () => {
+              log('RankedWar', 'Auto-refresh triggered')
+              try {
+                await triggerRankedWarUIRefresh(true)
+              } catch (err) {
+                log('RankedWar', 'Auto-refresh failed:', err)
+              }
+            }, refreshDelay)
+          } else {
+            log('RankedWar', 'Auto-refresh delay exceeds maximum, not scheduling')
+          }
+        } else {
+          log('RankedWar', 'Not on ranked war page, auto-refresh not scheduled')
+        }
       } else {
+        log('RankedWar', 'No nextUpdate in API response')
         // Fallback to 1 minute if NextUpdate not provided
         rankedWarStatsCacheExpiry = Date.now() + 60000
       }
@@ -2083,22 +2189,27 @@
   function formatRelativeTime(dateString) {
     if (!dateString) return null
 
-    const date = new Date(dateString)
+    // Normalize timestamps with microsecond precision (6 digits) to milliseconds (3 digits)
+    // e.g., "2026-01-24T21:01:30.088026Z" -> "2026-01-24T21:01:30.088Z"
+    const normalizedDateString = dateString.replace(/\.(\d{3})\d+Z$/, '.$1Z')
+
+    const date = new Date(normalizedDateString)
     if (isNaN(date.getTime())) return null
 
     const now = new Date()
     const diffMs = now.getTime() - date.getTime()
 
-    // Handle future dates or invalid dates
-    if (diffMs < 0) return 'just now'
+    // Handle future dates (clock skew) - treat small future times as "just now"
+    // For larger clock skews, use absolute difference
+    const absDiffMs = Math.abs(diffMs)
 
-    const diffSeconds = Math.floor(diffMs / 1000)
+    const diffSeconds = Math.floor(absDiffMs / 1000)
     const diffMinutes = Math.floor(diffSeconds / 60)
     const diffHours = Math.floor(diffMinutes / 60)
     const diffDays = Math.floor(diffHours / 24)
 
     if (diffSeconds < 60) {
-      return 'just now'
+      return `${diffSeconds} second${diffSeconds !== 1 ? 's' : ''} ago`
     } else if (diffMinutes < 60) {
       return `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''} ago`
     } else if (diffHours < 24) {
@@ -2110,44 +2221,154 @@
     }
   }
 
-  // Create limits display element
-  function createLimitsDisplay(limits, lastUpdated) {
-    const container = document.createElement('div')
-    container.className = 'wr-rw-limits'
+  // Update existing limits display element
+  function updateLimitsDisplay(container, limits, lastUpdated, onRefresh) {
+    if (!container) return
+
+    // Store for later use when toggling auto-refresh
+    container._lastLimits = limits
+    container._lastUpdated = lastUpdated
+
+    // Clear existing interval if any
+    if (container._limitsUpdateInterval) {
+      clearInterval(container._limitsUpdateInterval)
+    }
 
     const relativeTime = formatRelativeTime(lastUpdated)
-    const updatedHtml = relativeTime ? `<span class="wr-rw-limits-updated">Last data update: ${escapeHtml(relativeTime)}</span>` : ''
+    const autoRefreshClass = rankedWarAutoRefreshEnabled ? 'enabled' : 'disabled'
+    const autoRefreshIcon = rankedWarAutoRefreshEnabled 
+      ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 2v6h-6"/>
+          <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+          <path d="M3 22v-6h6"/>
+          <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+          <circle cx="12" cy="12" r="2" fill="currentColor"/>
+        </svg>`
+      : `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 2v6h-6"/>
+          <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+          <path d="M3 22v-6h6"/>
+          <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+          <line x1="2" y1="2" x2="22" y2="22"/>
+        </svg>`
+    const refreshBtnHtml = onRefresh ? `<button class="wr-rw-refresh-btn ${autoRefreshClass}">${autoRefreshIcon}</button>` : ''
+    const updatedHtml = relativeTime ? `<span class="wr-rw-limits-updated">Last data update: ${escapeHtml(relativeTime)}</span>${refreshBtnHtml}` : ''
 
     if (!limits) {
       container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span><span class="wr-rw-limits-label">No active limits</span></div>${updatedHtml}`
-      return container
+    } else {
+      const items = []
+
+      if (limits.minHits != null || limits.maxHits != null) {
+        const hitsText = limits.minHits != null && limits.maxHits != null
+          ? `${limits.minHits}-${limits.maxHits}`
+          : limits.minHits != null
+            ? `≥${limits.minHits}`
+            : `≤${limits.maxHits}`
+        items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Number of Hits: </span><span class="wr-rw-limits-value">${escapeHtml(hitsText)}</span></span>`)
+      }
+
+      if (limits.minTotalRespect != null || limits.maxTotalRespect != null) {
+        const totalText = limits.minTotalRespect != null && limits.maxTotalRespect != null
+          ? `${limits.minTotalRespect.toFixed(1)}-${limits.maxTotalRespect.toFixed(1)}`
+          : limits.minTotalRespect != null
+            ? `≥${limits.minTotalRespect.toFixed(1)}`
+            : `≤${limits.maxTotalRespect.toFixed(1)}`
+        items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Total Respect: </span><span class="wr-rw-limits-value">${escapeHtml(totalText)}</span></span>`)
+      }
+
+      if (limits.averageRespectGoal != null) {
+        items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Average Respect: </span><span class="wr-rw-limits-value">≥${escapeHtml(limits.averageRespectGoal.toFixed(2))}</span></span>`)
+      }
+
+      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${updatedHtml}`
     }
 
-    const items = []
-
-    if (limits.minHits != null || limits.maxHits != null) {
-      const hitsText = limits.minHits != null && limits.maxHits != null
-        ? `${limits.minHits}-${limits.maxHits}`
-        : limits.minHits != null
-          ? `≥${limits.minHits}`
-          : `≤${limits.maxHits}`
-      items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Number of Hits: </span><span class="wr-rw-limits-value">${escapeHtml(hitsText)}</span></span>`)
+    // Set up refresh button click handler
+    if (onRefresh) {
+      const refreshBtn = container.querySelector('.wr-rw-refresh-btn')
+      if (refreshBtn) {
+        // Store the onRefresh function on container to prevent duplicates
+        container._onRefresh = onRefresh
+        
+        refreshBtn.addEventListener('click', async (e) => {
+          // Prevent concurrent refreshes
+          if (container._isRefreshing) {
+            log('RankedWar', 'Refresh already in progress, ignoring click')
+            return
+          }
+          
+          e.preventDefault()
+          e.stopPropagation()
+          
+          // Remove focus to close tooltip
+          if (document.activeElement) {
+            document.activeElement.blur()
+          }
+          refreshBtn.blur()
+          
+          // Toggle auto-refresh state
+          if (rankedWarAutoRefreshEnabled) {
+            // Disable auto-refresh
+            rankedWarAutoRefreshEnabled = false
+            if (rankedWarAutoRefreshTimeout) {
+              clearTimeout(rankedWarAutoRefreshTimeout)
+              rankedWarAutoRefreshTimeout = null
+            }
+            log('RankedWar', 'Auto-refresh disabled')
+            toast('Auto-refresh disabled', 'info')
+            // Update button appearance immediately
+            updateLimitsDisplay(container, container._lastLimits, container._lastUpdated, container._onRefresh)
+          } else {
+            // Re-enable auto-refresh and do a manual refresh
+            rankedWarAutoRefreshEnabled = true
+            log('RankedWar', 'Auto-refresh re-enabled, triggering refresh')
+            
+            container._isRefreshing = true
+            refreshBtn.classList.add('loading')
+            
+            try {
+              await container._onRefresh()
+              toast('Auto-refresh enabled', 'success')
+            } catch (err) {
+              log('RankedWar', 'Refresh error:', err)
+            } finally {
+              container._isRefreshing = false
+              // Button will be recreated by update, so no need to remove loading class
+            }
+          }
+        })
+      }
     }
 
-    if (limits.minTotalRespect != null || limits.maxTotalRespect != null) {
-      const totalText = limits.minTotalRespect != null && limits.maxTotalRespect != null
-        ? `${limits.minTotalRespect.toFixed(1)}-${limits.maxTotalRespect.toFixed(1)}`
-        : limits.minTotalRespect != null
-          ? `≥${limits.minTotalRespect.toFixed(1)}`
-          : `≤${limits.maxTotalRespect.toFixed(1)}`
-      items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Total Respect: </span><span class="wr-rw-limits-value">${escapeHtml(totalText)}</span></span>`)
-    }
+    // Set up dynamic time update for "Last data update" timestamp
+    if (lastUpdated) {
+      const updateInterval = setInterval(() => {
+        // Stop updating if element is no longer in DOM
+        if (!container.isConnected) {
+          clearInterval(updateInterval)
+          return
+        }
 
-    if (limits.averageRespectGoal != null) {
-      items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Average Respect: </span><span class="wr-rw-limits-value">≥${escapeHtml(limits.averageRespectGoal.toFixed(2))}</span></span>`)
-    }
+        const updatedSpan = container.querySelector('.wr-rw-limits-updated')
+        if (updatedSpan) {
+          const newRelativeTime = formatRelativeTime(lastUpdated)
+          if (newRelativeTime) {
+            updatedSpan.textContent = `Last data update: ${newRelativeTime}`
+          }
+        }
+      }, 1000)
 
-    container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${updatedHtml}`
+      // Store interval ID for cleanup
+      container._limitsUpdateInterval = updateInterval
+    }
+  }
+
+  // Create limits display element
+  function createLimitsDisplay(limits, lastUpdated, onRefresh) {
+    const container = document.createElement('div')
+    container.className = 'wr-rw-limits'
+    updateLimitsDisplay(container, limits, lastUpdated, onRefresh)
     return container
   }
 
@@ -2236,13 +2457,26 @@
       return
     }
 
-    // Add limits display below faction-war-info
+    // Refresh function to manually update stats
+    const refreshStats = async () => {
+      log('RankedWar', 'Manual refresh triggered')
+      await triggerRankedWarUIRefresh()
+    }
+
+    // Add or update limits display below faction-war-info
     const factionWarInfo = document.querySelector('.faction-war-info')
-    if (factionWarInfo && !document.querySelector('.wr-rw-limits')) {
-      log('RankedWar', 'Adding limits display')
-      const limitsDisplay = createLimitsDisplay(statsData.currentLimit, statsData.lastUpdated)
-      factionWarInfo.parentNode.insertBefore(limitsDisplay, factionWarInfo.nextSibling)
-    } else if (!factionWarInfo) {
+    let limitsDisplay = document.querySelector('.wr-rw-limits')
+    
+    if (factionWarInfo) {
+      if (!limitsDisplay) {
+        log('RankedWar', 'Creating limits display')
+        limitsDisplay = createLimitsDisplay(statsData.currentLimit, statsData.lastUpdated, refreshStats)
+        factionWarInfo.parentNode.insertBefore(limitsDisplay, factionWarInfo.nextSibling)
+      } else {
+        log('RankedWar', 'Updating existing limits display')
+        updateLimitsDisplay(limitsDisplay, statsData.currentLimit, statsData.lastUpdated, refreshStats)
+      }
+    } else {
       log('RankedWar', 'Could not find .faction-war-info element')
     }
 
