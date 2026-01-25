@@ -12,8 +12,8 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @connect      api.torn.zzcraft.net
-// @updateURL    https://raw.githubusercontent.com/TuRz4m/warroom-userscript/refs/heads/main/warroom-userscript.js
-// @downloadURL  https://raw.githubusercontent.com/TuRz4m/warroom-userscript/refs/heads/main/warroom-userscript.js
+// @updateURL    https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/warroom.user.js
+// @downloadURL  https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/warroom.user.js
 // @require   https://raw.githubusercontent.com/Tampermonkey/utils/refs/heads/main/requires/gh_2215_make_GM_xhr_more_parallel_again.js
 // ==/UserScript==
 
