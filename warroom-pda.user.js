@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         TuRzAm WarRoom Connector (TornPDA)
-// @description  Warroom connector script for TornPDA users. Connects to WarRoomHub via PDA's HTTP API.
+// @name         RR - Torn War Helper (TornPDA)
+// @description  Warroom connector script for TornPDA users + RankedWar enhancements
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.1.2
+// @version      1.1.3
 // @match        https://www.torn.com/*
 // @grant        none
 // ==/UserScript==
@@ -35,7 +35,8 @@
   const DEFAULT_SETTINGS = {
     toastPosition: 'bottom-left',
     autoHideFullAttacks: true,
-    attackFeedEnabled: true
+    attackFeedEnabled: true,
+    showMemberStatsOnRankedWar: true
   }
 
   function getSettings() {
@@ -63,6 +64,7 @@
    **********************/
   let jwt = null
   let currentUsername = null
+  let currentUserId = null
   let connection = null
   let warRoomIds = []
 
@@ -258,6 +260,7 @@
     if (!claims) return false
 
     currentUsername = claims['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name']
+    currentUserId = claims['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier']
     return !!currentUsername
   }
 
@@ -1268,9 +1271,15 @@
       color: #ccc;
       display: flex;
       flex-wrap: wrap;
-      justify-content: space-between;
       align-items: center;
-      gap: 0.5rem;
+      gap: 0.25rem 1rem;
+    }
+
+    .wr-rw-limits-footer {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      margin-top: 0.25rem;
     }
 
     .wr-rw-limits-content {
@@ -2222,12 +2231,13 @@
   }
 
   // Update existing limits display element
-  function updateLimitsDisplay(container, limits, lastUpdated, onRefresh) {
+  function updateLimitsDisplay(container, limits, lastUpdated, onRefresh, members) {
     if (!container) return
 
     // Store for later use when toggling auto-refresh
     container._lastLimits = limits
     container._lastUpdated = lastUpdated
+    container._lastMembers = members
 
     // Clear existing interval if any
     if (container._limitsUpdateInterval) {
@@ -2236,7 +2246,7 @@
 
     const relativeTime = formatRelativeTime(lastUpdated)
     const autoRefreshClass = rankedWarAutoRefreshEnabled ? 'enabled' : 'disabled'
-    const autoRefreshIcon = rankedWarAutoRefreshEnabled 
+    const autoRefreshIcon = rankedWarAutoRefreshEnabled
       ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 2v6h-6"/>
           <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
@@ -2252,10 +2262,22 @@
           <line x1="2" y1="2" x2="22" y2="22"/>
         </svg>`
     const refreshBtnHtml = onRefresh ? `<button class="wr-rw-refresh-btn ${autoRefreshClass}">${autoRefreshIcon}</button>` : ''
-    const updatedHtml = relativeTime ? `<span class="wr-rw-limits-updated">Last data update: ${escapeHtml(relativeTime)}</span>${refreshBtnHtml}` : ''
+    const updatedHtml = relativeTime ? `<div class="wr-rw-limits-footer"><span class="wr-rw-limits-updated">Last data update: ${escapeHtml(relativeTime)}</span>${refreshBtnHtml}</div>` : ''
+
+    // Find current user's stats from members array
+    let myStatsHtml = ''
+    if (members && currentUserId) {
+      const myMember = members.find(m => String(m.id) === String(currentUserId))
+      if (myMember) {
+        const myHits = myMember.nbWarHits ?? 0
+        const myAvgRespect = myMember.averageRespect ?? 0
+        const myCompliance = checkRankedWarCompliance(myMember, limits)
+        myStatsHtml = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">My Hits:</span><span class="wr-rw-stat ${escapeHtml(myCompliance.hits)}" style="margin-left: 0.5rem;"><span class="wr-rw-stat-label">Hits: </span>${escapeHtml(String(myHits))}</span><span class="wr-rw-stat ${escapeHtml(myCompliance.avg)}"><span class="wr-rw-stat-label">Avg Respect: </span>${escapeHtml(myAvgRespect.toFixed(2))}</span></div>`
+      }
+    }
 
     if (!limits) {
-      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span><span class="wr-rw-limits-label">No active limits</span></div>${updatedHtml}`
+      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span><span class="wr-rw-limits-label">No active limits</span></div>${myStatsHtml}${updatedHtml}`
     } else {
       const items = []
 
@@ -2281,7 +2303,7 @@
         items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Average Respect: </span><span class="wr-rw-limits-value">≥${escapeHtml(limits.averageRespectGoal.toFixed(2))}</span></span>`)
       }
 
-      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${updatedHtml}`
+      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${myStatsHtml}${updatedHtml}`
     }
 
     // Set up refresh button click handler
@@ -2318,7 +2340,7 @@
             log('RankedWar', 'Auto-refresh disabled')
             toast('Auto-refresh disabled', 'info')
             // Update button appearance immediately
-            updateLimitsDisplay(container, container._lastLimits, container._lastUpdated, container._onRefresh)
+            updateLimitsDisplay(container, container._lastLimits, container._lastUpdated, container._onRefresh, container._lastMembers)
           } else {
             // Re-enable auto-refresh and do a manual refresh
             rankedWarAutoRefreshEnabled = true
@@ -2365,10 +2387,10 @@
   }
 
   // Create limits display element
-  function createLimitsDisplay(limits, lastUpdated, onRefresh) {
+  function createLimitsDisplay(limits, lastUpdated, onRefresh, members) {
     const container = document.createElement('div')
     container.className = 'wr-rw-limits'
-    updateLimitsDisplay(container, limits, lastUpdated, onRefresh)
+    updateLimitsDisplay(container, limits, lastUpdated, onRefresh, members)
     return container
   }
 
@@ -2466,37 +2488,39 @@
     // Add or update limits display below faction-war-info
     const factionWarInfo = document.querySelector('.faction-war-info')
     let limitsDisplay = document.querySelector('.wr-rw-limits')
-    
+
     if (factionWarInfo) {
       if (!limitsDisplay) {
         log('RankedWar', 'Creating limits display')
-        limitsDisplay = createLimitsDisplay(statsData.currentLimit, statsData.lastUpdated, refreshStats)
+        limitsDisplay = createLimitsDisplay(statsData.currentLimit, statsData.lastUpdated, refreshStats, statsData.members)
         factionWarInfo.parentNode.insertBefore(limitsDisplay, factionWarInfo.nextSibling)
       } else {
         log('RankedWar', 'Updating existing limits display')
-        updateLimitsDisplay(limitsDisplay, statsData.currentLimit, statsData.lastUpdated, refreshStats)
+        updateLimitsDisplay(limitsDisplay, statsData.currentLimit, statsData.lastUpdated, refreshStats, statsData.members)
       }
     } else {
       log('RankedWar', 'Could not find .faction-war-info element')
     }
 
-    // Find all member rows in your faction
-    const memberRows = yourFactionSection.querySelectorAll('li.your')
-    log('RankedWar', `Found ${memberRows.length} member rows to enhance`)
+    // Find all member rows in your faction (only if setting enabled)
+    if (SETTINGS.showMemberStatsOnRankedWar) {
+      const memberRows = yourFactionSection.querySelectorAll('li.your')
+      log('RankedWar', `Found ${memberRows.length} member rows to enhance`)
 
-    for (const row of memberRows) {
-      const username = extractUsernameFromRow(row)
-      if (!username) continue
+      for (const row of memberRows) {
+        const username = extractUsernameFromRow(row)
+        if (!username) continue
 
-      // Get member data or create default with zeros (case-insensitive lookup)
-      const memberData = membersByName.get(username.toLowerCase()) || {
-        name: username,
-        nbWarHits: 0,
-        totalRespect: 0,
-        averageRespect: 0
+        // Get member data or create default with zeros (case-insensitive lookup)
+        const memberData = membersByName.get(username.toLowerCase()) || {
+          name: username,
+          nbWarHits: 0,
+          totalRespect: 0,
+          averageRespect: 0
+        }
+
+        addStatsToMemberRow(row, memberData, statsData.currentLimit)
       }
-
-      addStatsToMemberRow(row, memberData, statsData.currentLimit)
     }
     log('RankedWar', 'Enhancement complete')
   }
@@ -2613,6 +2637,16 @@
         <div class="wr-setting-desc">Automatically hide attacks when they become full</div>
       </div>
 
+      <div class="wr-setting-group">
+        <div class="wr-setting-toggle" id="wr-toggle-memberstats">
+          <span class="wr-toggle-label">Show Member Stats on Ranked War</span>
+          <div class="wr-toggle-switch ${SETTINGS.showMemberStatsOnRankedWar ? 'active' : ''}">
+            <div class="wr-toggle-slider"></div>
+          </div>
+        </div>
+        <div class="wr-setting-desc">Show hits/avg respect for all members in /war/rank</div>
+      </div>
+
       <div class="wr-modal-footer">
         <button class="wr-btn-secondary" id="wr-clear-cache">Clear Cache</button>
         <button class="wr-btn-secondary" id="wr-clear-token">Clear Token</button>
@@ -2648,12 +2682,19 @@
       sw.classList.toggle('active')
     })
 
+    const toggleMemberStats = modal.querySelector('#wr-toggle-memberstats')
+    toggleMemberStats.addEventListener('click', () => {
+      const sw = toggleMemberStats.querySelector('.wr-toggle-switch')
+      sw.classList.toggle('active')
+    })
+
     // Save button
     modal.querySelector('#wr-save').addEventListener('click', async () => {
       const newSettings = {
         toastPosition: modal.querySelector('#wr-toast-position').value,
         attackFeedEnabled: toggleFeed.querySelector('.wr-toggle-switch').classList.contains('active'),
-        autoHideFullAttacks: toggleAutoHide.querySelector('.wr-toggle-switch').classList.contains('active')
+        autoHideFullAttacks: toggleAutoHide.querySelector('.wr-toggle-switch').classList.contains('active'),
+        showMemberStatsOnRankedWar: toggleMemberStats.querySelector('.wr-toggle-switch').classList.contains('active')
       }
 
       if (saveSettings(newSettings)) {
