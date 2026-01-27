@@ -1,14 +1,217 @@
 // ==UserScript==
-// @name         RR - Torn War Helper (TornPDA)
-// @description  Warroom connector script for TornPDA users + RankedWar enhancements
+// @name         RR - Torn War Helper
+// @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.1.3
-// @match        https://www.torn.com/*
-// @grant        none
+// @version      1.2.0
+// @match        https://www.torn.com/loader.php*
+// @match        https://www.torn.com/factions.php*
+// @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
+// @grant        GM_addStyle
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @connect      api.torn.zzcraft.net
+// @updateURL    https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/warroom.user.js
+// @downloadURL  https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/warroom.user.js
+// @require      https://raw.githubusercontent.com/Tampermonkey/utils/refs/heads/main/requires/gh_2215_make_GM_xhr_more_parallel_again.js
 // ==/UserScript==
 
 ;(async function () {
+  'use strict'
+
+  /**********************
+   * PLATFORM DETECTION
+   **********************/
+  const IS_TORN_PDA = typeof window.flutter_inappwebview !== 'undefined'
+
+  /**********************
+   * PLATFORM DEFINITION
+   **********************/
+  const platform = IS_TORN_PDA
+    ? {
+        // ——— TornPDA Platform ———
+        fetch: async function pdaFetch(method, url, headers = {}, body = null) {
+          try {
+            let res
+            if (method === 'GET') {
+              res = await window.flutter_inappwebview.callHandler('PDA_httpGet', url, headers)
+            } else if (method === 'POST') {
+              res = await window.flutter_inappwebview.callHandler('PDA_httpPost', url, headers, body)
+            } else if (method === 'DELETE') {
+              // PDA doesn't support DELETE - skip silently for connection cleanup
+              return { status: 200, responseText: '' }
+            } else {
+              throw new Error(`Unsupported method: ${method}`)
+            }
+
+            if (res.status >= 200 && res.status < 300) {
+              return res
+            } else {
+              let errorMsg = res.statusText || `HTTP ${res.status}`
+              try {
+                if (res.responseText) {
+                  const errorData = JSON.parse(res.responseText)
+                  errorMsg = errorData.message || errorData.error || errorData.title || errorMsg
+                }
+              } catch {
+                // Use statusText
+              }
+              throw new Error(`HTTP ${res.status}: ${errorMsg}`)
+            }
+          } catch (err) {
+            if (err.message?.startsWith('HTTP ')) {
+              throw err
+            }
+            throw new Error('Network error: ' + (err.message || err))
+          }
+        },
+        getValue: (key, defaultValue) => {
+          try {
+            const value = localStorage.getItem(key)
+            return value !== null ? value : defaultValue
+          } catch {
+            return defaultValue
+          }
+        },
+        setValue: (key, value) => {
+          try {
+            localStorage.setItem(key, value)
+          } catch {
+            // Ignore storage errors
+          }
+        },
+        removeValue: (key) => {
+          try {
+            localStorage.removeItem(key)
+          } catch {
+            // Ignore storage errors
+          }
+        },
+        addStyle: (css) => {
+          const style = document.createElement('style')
+          style.textContent = css
+          document.head.appendChild(style)
+        },
+        getApiKey: () => "###PDA-APIKEY###",
+        openUrl: (url) => { window.location.href = url },
+        playNotificationSound: () => {},
+        confirm: () => true,
+        onInitialized: () => {},
+        displayName: 'TornPDA',
+        isPda: true,
+        targetCacheKey: 'wr_target_cache',
+        settingsKey: 'wr_settings',
+      }
+    : {
+        // ——— Desktop (Tampermonkey) Platform ———
+        fetch: async (method, url, headers = {}, body = null) => {
+          try {
+            const res = await GM.xmlHttpRequest({
+              method,
+              url,
+              headers,
+              data: body,
+              timeout: 30000,
+            })
+
+            if (res.status >= 200 && res.status < 300) {
+              return res
+            } else {
+              let errorMsg = res.statusText
+              try {
+                if (res.responseText) {
+                  const errorData = JSON.parse(res.responseText)
+                  errorMsg = errorData.message || errorData.error || errorData.title || res.statusText
+                }
+              } catch {
+                // If parsing fails, use statusText
+              }
+              throw new Error(`HTTP ${res.status}: ${errorMsg}`)
+            }
+          } catch (err) {
+            if (err.message?.startsWith('HTTP ')) {
+              throw err
+            }
+            throw new Error('Network error: ' + (err.message || err))
+          }
+        },
+        getValue: (key, defaultValue) => {
+          try {
+            return GM_getValue(key, defaultValue)
+          } catch {
+            return defaultValue
+          }
+        },
+        setValue: (key, value) => {
+          try {
+            GM_setValue(key, value)
+          } catch {
+            // Ignore storage errors
+          }
+        },
+        removeValue: (key) => {
+          try {
+            GM_setValue(key, undefined)
+          } catch {
+            // Ignore storage errors
+          }
+        },
+        addStyle: (css) => GM_addStyle(css),
+        getApiKey: () => {
+          try {
+            const stored = GM_getValue('wr_settings', null)
+            const settings = stored ? JSON.parse(stored) : {}
+            return settings.apiKey || ''
+          } catch {
+            return ''
+          }
+        },
+        openUrl: (url) => window.open(url, '_blank'),
+        playNotificationSound: () => {
+          try {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+            const oscillator = audioContext.createOscillator()
+            const gainNode = audioContext.createGain()
+
+            oscillator.connect(gainNode)
+            gainNode.connect(audioContext.destination)
+
+            oscillator.frequency.value = 800
+            oscillator.type = 'sine'
+
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime)
+            gainNode.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.01)
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1)
+            gainNode.gain.setValueAtTime(0, audioContext.currentTime + 0.15)
+            gainNode.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.16)
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.25)
+
+            oscillator.start(audioContext.currentTime)
+            oscillator.stop(audioContext.currentTime + 0.3)
+          } catch {
+            // Ignore audio errors
+          }
+        },
+        confirm: (message) => confirm(message),
+        onInitialized: (connection) => {
+          window.__warRoomConnection = connection
+          console.log(
+            '%c TuRzAm WarRoom Connector v1.2.0 %c Loaded successfully! ',
+            'background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px 0 0 4px;',
+            'background: #2ecc71; color: white; font-weight: bold; padding: 4px 8px; border-radius: 0 4px 4px 0;'
+          )
+        },
+        displayName: 'Torn',
+        isPda: false,
+        targetCacheKey: 'wr_target_cache',
+        settingsKey: 'wr_settings',
+      }
+
+  /**********************
+   * SHARED LOGIC
+   **********************/
+  async function initWarRoom(platform) {
   'use strict'
 
   /**********************
@@ -18,39 +221,80 @@
   const HUB_URL = 'https://api.torn.zzcraft.net/warroomhub'
   const TOKEN_STORAGE_KEY = 'wr_jwt_token'
   const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000 // 5 minutes
+  const TARGET_CACHE_KEY = platform.targetCacheKey
+  const TARGET_CACHE_TTL = 60 * 60 * 1000 // 1 hour
+  const SETTINGS_KEY = platform.settingsKey
 
-  // Detect TornPDA environment
-  const IS_TORN_PDA = typeof window.flutter_inappwebview !== 'undefined'
+  /**********************
+   * UTILITY FUNCTIONS
+   **********************/
 
-  /**
-   * @type {string}
-   * @readonly
-   * The current PDA API key. Do not modify this unless you're not using PDA.
-   */
-  const API_KEY = "###PDA-APIKEY###"
+  function escapeHtml(str) {
+    if (str == null) return ''
+    const div = document.createElement('div')
+    div.textContent = String(str)
+    return div.innerHTML
+  }
+
+  function parseJwtClaims(token) {
+    try {
+      return JSON.parse(atob(token.split('.')[1]))
+    } catch {
+      return null
+    }
+  }
+
+  function extractErrorMessage(error) {
+    return error.message.replace(/^HTTP \d+:\s*/, '')
+  }
+
+  function log(category, message, data) {
+    if (data !== undefined) {
+      if (typeof data === 'object' && data !== null) {
+        try {
+          console.log(`[WarRoom:${category}]`, message, JSON.stringify(data, null, 2))
+        } catch {
+          console.log(`[WarRoom:${category}]`, message, data)
+        }
+      } else {
+        console.log(`[WarRoom:${category}]`, message, data)
+      }
+    } else {
+      console.log(`[WarRoom:${category}]`, message)
+    }
+  }
 
   /**********************
    * SETTINGS MANAGEMENT
    **********************/
   const DEFAULT_SETTINGS = {
-    toastPosition: 'bottom-left',
-    autoHideFullAttacks: true,
+    apiKey: '',
     attackFeedEnabled: true,
+    toastPosition: 'bottom-left',
+    buttonPosition: 'bottom-left',
+    toastDuration: 20000,
+    soundEnabled: false,
+    autoHideFullAttacks: true,
+    urgentThresholdMinutes: 1,
+    maxToasts: 10,
     showMemberStatsOnRankedWar: true
   }
 
   function getSettings() {
     try {
-      const stored = localStorage.getItem('wr_pda_settings')
-      return stored ? { ...DEFAULT_SETTINGS, ...JSON.parse(stored) } : DEFAULT_SETTINGS
+      const stored = platform.getValue(SETTINGS_KEY, null)
+      if (!stored) return { ...DEFAULT_SETTINGS }
+      const parsed = typeof stored === 'string' ? JSON.parse(stored) : stored
+      return { ...DEFAULT_SETTINGS, ...parsed }
     } catch {
-      return DEFAULT_SETTINGS
+      return { ...DEFAULT_SETTINGS }
     }
   }
 
   function saveSettings(settings) {
     try {
-      localStorage.setItem('wr_pda_settings', JSON.stringify(settings))
+      const value = typeof settings === 'string' ? settings : JSON.stringify(settings)
+      platform.setValue(SETTINGS_KEY, value)
       return true
     } catch {
       return false
@@ -69,58 +313,12 @@
   let warRoomIds = []
 
   /**********************
-   * UTILITY FUNCTIONS
-   **********************/
-
-  // HTML sanitization to prevent XSS
-  function escapeHtml(str) {
-    if (str == null) return ''
-    const div = document.createElement('div')
-    div.textContent = String(str)
-    return div.innerHTML
-  }
-
-  // Parse JWT claims without throwing
-  function parseJwtClaims(token) {
-    try {
-      return JSON.parse(atob(token.split('.')[1]))
-    } catch {
-      return null
-    }
-  }
-
-  // Extract user-friendly error message from Error object
-  function extractErrorMessage(error) {
-    return error.message.replace(/^HTTP \d+:\s*/, '')
-  }
-
-  // Debug logging
-  function log(category, message, data) {
-    if (data !== undefined) {
-      // Use JSON.stringify for objects to see their contents
-      if (typeof data === 'object' && data !== null) {
-        try {
-          console.log(`[WarRoom:${category}]`, message, JSON.stringify(data, null, 2))
-        } catch (e) {
-          console.log(`[WarRoom:${category}]`, message, data)
-        }
-      } else {
-        console.log(`[WarRoom:${category}]`, message, data)
-      }
-    } else {
-      console.log(`[WarRoom:${category}]`, message)
-    }
-  }
-
-  /**********************
    * CACHE MANAGEMENT
    **********************/
-  const TARGET_CACHE_KEY = 'wr_pda_target_cache'
-  const TARGET_CACHE_TTL = 60 * 60 * 1000 // 1 hour
 
   function clearTargetCache() {
     try {
-      localStorage.removeItem(TARGET_CACHE_KEY)
+      platform.removeValue(TARGET_CACHE_KEY)
       return true
     } catch {
       return false
@@ -129,15 +327,15 @@
 
   function getCachedTargets() {
     try {
-      const cached = localStorage.getItem(TARGET_CACHE_KEY)
+      const cached = platform.getValue(TARGET_CACHE_KEY, null)
       if (!cached) return null
-      
-      const data = JSON.parse(cached)
+
+      const data = typeof cached === 'string' ? JSON.parse(cached) : cached
       if (Date.now() - data.timestamp > TARGET_CACHE_TTL) {
-        localStorage.removeItem(TARGET_CACHE_KEY)
+        platform.removeValue(TARGET_CACHE_KEY)
         return null
       }
-      
+
       return data.targets
     } catch {
       return null
@@ -146,7 +344,7 @@
 
   function setCachedTargets(targets) {
     try {
-      localStorage.setItem(TARGET_CACHE_KEY, JSON.stringify({
+      platform.setValue(TARGET_CACHE_KEY, JSON.stringify({
         targets,
         timestamp: Date.now()
       }))
@@ -161,12 +359,12 @@
 
   function getStoredToken() {
     try {
-      const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+      const token = platform.getValue(TOKEN_STORAGE_KEY, null)
       if (token && !isTokenExpired(token)) {
         return token
       }
       clearStoredToken()
-    } catch (e) {
+    } catch {
       // Ignore storage errors
     }
     return null
@@ -174,17 +372,17 @@
 
   function storeToken(token) {
     try {
-      localStorage.setItem(TOKEN_STORAGE_KEY, token)
+      platform.setValue(TOKEN_STORAGE_KEY, token)
       return true
-    } catch (e) {
+    } catch {
       return false
     }
   }
 
   function clearStoredToken() {
     try {
-      localStorage.removeItem(TOKEN_STORAGE_KEY)
-    } catch (e) {
+      platform.removeValue(TOKEN_STORAGE_KEY)
+    } catch {
       // Ignore storage errors
     }
   }
@@ -197,58 +395,20 @@
   }
 
   /**********************
-   * HTTP LAYER - PDA WRAPPER
-   **********************/
-
-  async function pdaFetch(method, url, headers = {}, body = null) {
-    try {
-      let res
-      if (method === 'GET') {
-        res = await window.flutter_inappwebview.callHandler('PDA_httpGet', url, headers)
-      } else if (method === 'POST') {
-        res = await window.flutter_inappwebview.callHandler('PDA_httpPost', url, headers, body)
-      } else if (method === 'DELETE') {
-        // PDA doesn't support DELETE - skip silently for connection cleanup
-        return { status: 200, responseText: '' }
-      } else {
-        throw new Error(`Unsupported method: ${method}`)
-      }
-
-      // Check status
-      if (res.status >= 200 && res.status < 300) {
-        return res
-      } else {
-        // Extract error message from response
-        let errorMsg = res.statusText || `HTTP ${res.status}`
-        try {
-          if (res.responseText) {
-            const errorData = JSON.parse(res.responseText)
-            errorMsg = errorData.message || errorData.error || errorData.title || errorMsg
-          }
-        } catch {
-          // Use statusText
-        }
-        throw new Error(`HTTP ${res.status}: ${errorMsg}`)
-      }
-    } catch (err) {
-      // Wrap non-HTTP errors
-      if (err.message?.startsWith('HTTP ')) {
-        throw err
-      }
-      throw new Error('Network error: ' + (err.message || err))
-    }
-  }
-
-  /**********************
    * AUTHENTICATION FLOW
    **********************/
 
   async function login() {
-    const res = await pdaFetch(
+    const apiKey = platform.getApiKey()
+    if (!apiKey) {
+      throw new Error('API key not configured')
+    }
+
+    const res = await platform.fetch(
       'POST',
       `${API_BASE}/auth/login`,
       { 'Content-Type': 'application/json' },
-      JSON.stringify({ apikey: API_KEY })
+      JSON.stringify({ apikey: apiKey })
     )
 
     const json = JSON.parse(res.responseText)
@@ -259,8 +419,8 @@
     const claims = parseJwtClaims(token)
     if (!claims) return false
 
-    currentUsername = claims['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name']
-    currentUserId = claims['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier']
+    currentUsername = claims['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name'] || null
+    currentUserId = claims['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier'] || null
     return !!currentUsername
   }
 
@@ -294,8 +454,6 @@
       jwt = null
       currentUsername = null
       clearStoredToken()
-
-      // Show error toast
       toast('Failed to authenticate: ' + extractErrorMessage(e), 'error')
     }
 
@@ -324,7 +482,7 @@
     async start() {
       try {
         // NEGOTIATE
-        const negotiateRes = await pdaFetch(
+        const negotiateRes = await platform.fetch(
           'POST',
           `${this.hubUrl}/negotiate?negotiateVersion=1`,
           {
@@ -339,7 +497,7 @@
 
         // HANDSHAKE
         const handshakePayload = JSON.stringify({ protocol: 'json', version: 1 }) + '\x1e'
-        await pdaFetch(
+        await platform.fetch(
           'POST',
           `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
           {
@@ -387,7 +545,7 @@
       this.pendingCalls.clear()
 
       // NEGOTIATE
-      const negotiateRes = await pdaFetch(
+      const negotiateRes = await platform.fetch(
         'POST',
         `${this.hubUrl}/negotiate?negotiateVersion=1`,
         {
@@ -402,7 +560,7 @@
 
       // HANDSHAKE
       const handshakePayload = JSON.stringify({ protocol: 'json', version: 1 }) + '\x1e'
-      await pdaFetch(
+      await platform.fetch(
         'POST',
         `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
         {
@@ -429,7 +587,7 @@
     }
 
     async poll() {
-      const res = await pdaFetch(
+      const res = await platform.fetch(
         'GET',
         `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
         {
@@ -449,7 +607,6 @@
           // Reset reconnect attempts on successful poll
           this.reconnectAttempts = 0
         } catch (e) {
-          // Check if this is a 404 or connection error that requires reconnect
           if (e.message.includes('HTTP 404') || e.message.includes('Network error')) {
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
               this.reconnectAttempts++
@@ -457,17 +614,11 @@
 
               await new Promise(resolve => setTimeout(resolve, delay))
 
-              if (this.running !== false) {  // Only reconnect if not explicitly stopped
+              if (this.running !== false) {
                 try {
-                  // Re-negotiate and reconnect
                   await this.reconnect()
-
-                  // Re-setup connection (display name, war rooms, attacks)
                   await setupConnection()
-
-                  // Show reconnection notification
                   toast('WarRoom Reconnected - Connection restored', 'success')
-
                   continue
                 } catch (reconnectError) {
                   log('SignalR', 'Reconnection failed', reconnectError.message)
@@ -577,7 +728,7 @@
 
       const payload = JSON.stringify(msg) + '\x1e'
 
-      return new Promise(async (resolve, reject) => {
+      return new Promise((resolve, reject) => {
         const timeoutId = setTimeout(() => {
           if (this.pendingCalls.has(invocationId)) {
             this.pendingCalls.delete(invocationId)
@@ -596,21 +747,19 @@
           }
         })
 
-        try {
-          await pdaFetch(
-            'POST',
-            `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
-            {
-              'Content-Type': 'text/plain;charset=UTF-8',
-              Authorization: `Bearer ${this.accessToken}`,
-            },
-            payload
-          )
-        } catch (e) {
+        platform.fetch(
+          'POST',
+          `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
+          {
+            'Content-Type': 'text/plain;charset=UTF-8',
+            Authorization: `Bearer ${this.accessToken}`,
+          },
+          payload
+        ).catch((e) => {
           clearTimeout(timeoutId)
           this.pendingCalls.delete(invocationId)
           reject(e)
-        }
+        })
       })
     }
 
@@ -628,7 +777,7 @@
       const payload = JSON.stringify(msg) + '\x1e'
 
       try {
-        await pdaFetch(
+        await platform.fetch(
           'POST',
           `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
           {
@@ -645,62 +794,66 @@
     stop() {
       this.running = false
       this.maxReconnectAttempts = 0
-      // Skip DELETE - not supported by PDA
+
+      if (this.connectionToken) {
+        platform.fetch('DELETE', `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`, {
+          Authorization: `Bearer ${this.accessToken}`,
+        }).catch(() => {
+          // Ignore errors on close
+        })
+      }
     }
   }
 
   /**********************
-   * MOBILE-FRIENDLY TOAST UI
+   * TOAST UI - CSS
    **********************/
 
-  // Inject mobile-optimized styles
-  const style = document.createElement('style')
-  style.textContent = `
+  const baseCSS = `
     .wr-toast-container {
       position: fixed;
       display: flex;
       gap: 10px;
       z-index: 99999;
-      max-width: calc(100vw - 20px);
       pointer-events: none;
     }
 
     .wr-toast-container.bottom-left {
-      left: 10px;
-      bottom: 40px;
+      left: 20px;
+      bottom: 70px;
       flex-direction: column-reverse;
     }
 
     .wr-toast-container.bottom-right {
-      right: 10px;
-      bottom: 40px;
+      right: 20px;
+      bottom: 70px;
       flex-direction: column-reverse;
     }
 
     .wr-toast-container.top-left {
-      left: 10px;
-      top: 40px;
+      left: 20px;
+      top: 70px;
       flex-direction: column;
     }
 
     .wr-toast-container.top-right {
-      right: 10px;
-      top: 40px;
+      right: 20px;
+      top: 70px;
       flex-direction: column;
     }
 
     .wr-toast {
-      background: rgba(30, 30, 50, 0.98);
-      backdrop-filter: blur(10px);
+      background: rgba(30, 30, 50, 0.95);
+      backdrop-filter: blur(20px);
       border: 1px solid rgba(155, 89, 182, 0.3);
-      border-radius: 12px;
-      padding: 12px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      border-radius: 0.75rem;
+      padding: 0.75rem;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       color: #fff;
       animation: wr-slidein 0.3s ease;
       min-width: 280px;
-      max-width: 100%;
+      max-width: 320px;
       pointer-events: auto;
     }
 
@@ -726,12 +879,13 @@
     .wr-toast-header {
       display: flex;
       justify-content: space-between;
-      align-items: center;
-      margin-bottom: 10px;
+      align-items: flex-start;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
     }
 
     .wr-toast-title {
-      font-size: 14px;
+      font-size: 0.9rem;
       font-weight: 600;
       color: #fff;
     }
@@ -741,13 +895,11 @@
       border: none;
       color: #888;
       cursor: pointer;
-      padding: 4px 8px;
-      border-radius: 4px;
-      font-size: 18px;
+      padding: 0.2rem 0.4rem;
+      border-radius: 0.25rem;
+      font-size: 1rem;
       line-height: 1;
       transition: all 0.2s;
-      min-width: 32px;
-      min-height: 32px;
     }
 
     .wr-toast-close:active {
@@ -757,34 +909,34 @@
 
     .wr-toast-message {
       color: #aaa;
-      font-size: 13px;
+      font-size: 0.8rem;
       line-height: 1.4;
     }
 
     .wr-attack-card {
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 0.5rem;
     }
 
     .wr-attack-top {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 8px;
+      gap: 0.5rem;
     }
 
     .wr-target-section {
       display: flex;
       align-items: baseline;
-      gap: 6px;
+      gap: 0.3rem;
       min-width: 0;
       flex: 1;
     }
 
     .wr-target-name {
       color: #fff;
-      font-size: 16px;
+      font-size: 1rem;
       font-weight: 600;
       white-space: nowrap;
       overflow: hidden;
@@ -793,15 +945,15 @@
 
     .wr-target-id {
       color: #666;
-      font-size: 12px;
+      font-size: 0.75rem;
       flex-shrink: 0;
     }
 
     .wr-status-badge {
-      font-size: 10px;
+      font-size: 0.65rem;
       font-weight: 600;
-      padding: 4px 8px;
-      border-radius: 4px;
+      padding: 0.2rem 0.4rem;
+      border-radius: 0.25rem;
       text-transform: uppercase;
       letter-spacing: 0.5px;
       flex-shrink: 0;
@@ -821,7 +973,7 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 8px 0;
+      padding: 0.4rem 0;
       border-top: 1px solid rgba(255, 255, 255, 0.06);
       border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     }
@@ -829,18 +981,17 @@
     .wr-timer-section {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 0.4rem;
       color: #ccc;
     }
 
     .wr-timer-icon {
       opacity: 0.7;
-      flex-shrink: 0;
     }
 
     .wr-timer-value {
       font-family: 'Consolas', 'Monaco', monospace;
-      font-size: 18px;
+      font-size: 1.1rem;
       font-weight: 700;
       color: #fff;
     }
@@ -866,7 +1017,7 @@
     }
 
     .wr-slots-value {
-      font-size: 16px;
+      font-size: 1rem;
       font-weight: 600;
     }
 
@@ -876,7 +1027,7 @@
 
     .wr-slots-label {
       color: #666;
-      font-size: 10px;
+      font-size: 0.65rem;
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
@@ -884,58 +1035,55 @@
     .wr-participants {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: 0.3rem;
     }
 
     .wr-participant {
       background: rgba(155, 89, 182, 0.15);
       color: #b388d9;
-      font-size: 12px;
-      padding: 4px 8px;
-      border-radius: 4px;
+      font-size: 0.75rem;
+      padding: 0.15rem 0.4rem;
+      border-radius: 0.25rem;
       white-space: nowrap;
-      max-width: 120px;
+      max-width: 100px;
       overflow: hidden;
       text-overflow: ellipsis;
     }
 
     .wr-actions {
       display: flex;
-      gap: 8px;
-      margin-top: 4px;
+      gap: 0.5rem;
+      margin-top: 0.25rem;
     }
 
     .wr-btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
-      padding: 10px 14px;
-      border-radius: 8px;
+      gap: 0.3rem;
+      padding: 0.35rem 0.6rem;
+      border-radius: 0.35rem;
       border: 1px solid rgba(255, 255, 255, 0.15);
       background: rgba(255, 255, 255, 0.05);
       color: #aaa;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 0.75rem;
       font-weight: 500;
       transition: all 0.2s ease;
-      flex: 1;
-      min-height: 44px;
     }
 
     .wr-btn:active {
       background: rgba(255, 255, 255, 0.15);
-      transform: scale(0.95);
     }
 
     .wr-btn-join {
-      background: rgba(46, 204, 113, 0.15);
+      background: rgba(46, 204, 113, 0.1);
       border-color: rgba(46, 204, 113, 0.3);
       color: #2ecc71;
     }
 
     .wr-btn-join:active {
-      background: rgba(46, 204, 113, 0.25);
+      background: rgba(46, 204, 113, 0.2);
     }
 
     .wr-btn-attack {
@@ -951,92 +1099,10 @@
     .wr-created-info {
       display: flex;
       justify-content: flex-end;
+      gap: 0.5rem;
       color: #666;
-      font-size: 11px;
-      margin-top: 4px;
-    }
-
-    /* Button base styles */
-    .wr-settings-btn,
-    .wr-feed-toggle-btn {
-      position: absolute;
-      width: 32px;
-      height: 32px;
-      top: 2px;
-      border-radius: 50%;
-      background: rgba(30, 30, 50, 0.9);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s ease;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-      z-index: 1000001;
-    }
-
-    /* Settings button */
-    .wr-settings-btn {
-      left: 160px;
-      top: 2px;
-      border: 1px solid rgba(155, 89, 182, 0.4);
-      color: #9b59b6;
-    }
-
-    .wr-settings-btn:active {
-      background: rgba(155, 89, 182, 0.2);
-      border-color: #9b59b6;
-      transform: scale(0.95);
-    }
-
-    /* Feed toggle button */
-    .wr-feed-toggle-btn {
-      left: 120px;
-      top: 2px;
-      border: 1px solid rgba(155, 89, 182, 0.4);
-      color: #9b59b6;
-    }
-
-    .wr-feed-toggle-btn:active {
-      background: rgba(155, 89, 182, 0.2);
-      border-color: #9b59b6;
-      transform: scale(0.95);
-    }
-
-    .wr-feed-toggle-btn.disabled {
-      background: rgba(30, 30, 50, 0.9);
-      border-color: rgba(231, 76, 60, 0.4);
-      color: #e74c3c;
-    }
-
-    .wr-feed-toggle-btn.disabled:active {
-      background: rgba(231, 76, 60, 0.2);
-      border-color: #e74c3c;
-    }
-
-    /* Coordinated attack request button */
-    .wr-attack-btn {
-      position: absolute;
-      left: 200px;
-      top: 2px;
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      background: rgba(30, 30, 50, 0.9);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000001;
-      transition: all 0.2s ease;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-      border: 1px solid rgba(46, 204, 113, 0.4);
-      color: #2ecc71;
-    }
-
-    .wr-attack-btn:active {
-      background: rgba(46, 204, 113, 0.2);
-      border-color: #2ecc71;
-      transform: scale(0.95);
+      font-size: 0.7rem;
+      margin-top: 0.25rem;
     }
 
     /* Settings modal */
@@ -1150,6 +1216,11 @@
       outline: none;
       border-color: #9b59b6;
       background: rgba(255, 255, 255, 0.08);
+    }
+
+    #wr-apikey:not(:focus) {
+      color: transparent;
+      text-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
     }
 
     .wr-setting-input option {
@@ -1272,7 +1343,7 @@
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: 0.25rem 1rem;
+      gap: 0.5rem 1rem;
     }
 
     .wr-rw-limits-footer {
@@ -1321,7 +1392,7 @@
       border: none;
       color: #9b59b6;
       cursor: pointer;
-      padding: 4px;
+      padding: 2px;
       margin-left: 0.5rem;
       opacity: 0.7;
       transition: all 0.2s;
@@ -1346,7 +1417,7 @@
       opacity: 1;
       transform: scale(0.95);
     }
-    
+
     .wr-rw-refresh-btn:focus {
       outline: none;
     }
@@ -1393,21 +1464,225 @@
       padding: 0.4rem 0.75rem;
       font-size: 0.8rem;
     }
+
+    /* Anchors for button positioning */
+    .header-menu {
+      anchor-name: --header-menu;
+    }
+
+    h4 {
+      anchor-name: --attacker-title;
+    }
   `
-  document.head.appendChild(style)
+
+  const buttonCSS = `
+    /* Desktop button base */
+    .wr-settings-btn,
+    .wr-feed-toggle-btn,
+    .wr-attack-btn {
+      position: fixed;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: rgba(30, 30, 50, 0.9);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 99999;
+      transition: all 0.2s ease;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .wr-settings-btn {
+      border: 1px solid rgba(155, 89, 182, 0.4);
+      color: #9b59b6;
+    }
+
+    .wr-settings-btn:hover {
+      background: rgba(155, 89, 182, 0.2);
+      border-color: #9b59b6;
+      transform: scale(1.1);
+    }
+
+    .wr-feed-toggle-btn {
+      border: 1px solid rgba(155, 89, 182, 0.4);
+      color: #9b59b6;
+    }
+
+    .wr-feed-toggle-btn:hover {
+      background: rgba(155, 89, 182, 0.2);
+      border-color: #9b59b6;
+      transform: scale(1.1);
+    }
+
+    .wr-feed-toggle-btn.disabled {
+      background: rgba(30, 30, 50, 0.9);
+      border-color: rgba(231, 76, 60, 0.4);
+      color: #e74c3c;
+    }
+
+    .wr-feed-toggle-btn.disabled:hover {
+      background: rgba(231, 76, 60, 0.2);
+      border-color: #e74c3c;
+    }
+
+    .wr-feed-toggle-btn.connecting {
+      background: rgba(30, 30, 50, 0.9);
+      border-color: rgba(243, 156, 18, 0.6);
+      color: #f39c12;
+      animation: wr-pulse-connecting 1.5s infinite;
+    }
+
+    @keyframes wr-pulse-connecting {
+      0%, 100% {
+        opacity: 1;
+        border-color: rgba(243, 156, 18, 0.6);
+      }
+      50% {
+        opacity: 0.7;
+        border-color: rgba(243, 156, 18, 1);
+      }
+    }
+
+    .wr-attack-btn {
+      position: absolute;
+      anchor-name: --attack-button;
+      bottom: anchor(--attacker-title bottom);
+      left: 50%;
+      transform: translate(-50%, 25%);
+      border: 1px solid rgba(46, 204, 113, 0.4);
+      color: #2ecc71;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .wr-attack-btn:hover {
+      background: rgba(46, 204, 113, 0.2);
+      border-color: #2ecc71;
+      transform: translate(-50%, 25%) scale(1.1);
+    }
+
+    .wr-attack-btn svg {
+      flex-shrink: 0;
+    }
+
+    .wr-attack-btn-label {
+      display: block;
+      max-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #2ecc71;
+      opacity: 0;
+      transition: max-width 0.4s ease, opacity 0.3s ease, margin 0.3s ease;
+      margin-left: 0;
+    }
+
+
+
+    /* Button positions - bottom-left */
+    .wr-feed-toggle-btn.bottom-left { left: 20px; bottom: 20px; }
+    .wr-settings-btn.bottom-left { left: 66px; bottom: 20px; }
+    .wr-attack-btn.bottom-left { left: 112px; bottom: 20px; }
+
+    /* Button positions - bottom-right */
+    .wr-feed-toggle-btn.bottom-right { right: 20px; bottom: 20px; }
+    .wr-settings-btn.bottom-right { right: 66px; bottom: 20px; }
+    .wr-attack-btn.bottom-right { right: 112px; bottom: 20px; }
+
+    /* Button positions - top-left */
+    .wr-feed-toggle-btn.top-left { left: 20px; top: 20px; }
+    .wr-settings-btn.top-left { left: 66px; top: 20px; }
+    .wr-attack-btn.top-left { left: 112px; top: 20px; }
+
+    /* Button positions - top-right */
+    .wr-feed-toggle-btn.top-right { right: 20px; top: 20px; }
+    .wr-settings-btn.top-right { right: 66px; top: 20px; }
+    .wr-attack-btn.top-right { right: 112px; top: 20px; }
+  `
+
+  const hoverCSS = `
+    @media (min-width: 1000px) {
+      .wr-attack-btn {
+        transition: all 0.3s ease;
+      }
+
+      .wr-attack-btn:hover {
+        width: auto;
+        border-radius: 18px;
+        padding: 0 14px;
+        transform: translate(-50%, 25%);
+      }
+
+      .wr-attack-btn:hover .wr-attack-btn-label {
+        max-width: 250px;
+        opacity: 1;
+        margin-left: 6px;
+      }
+
+      .wr-toast-close:hover {
+        background: rgba(255, 255, 255, 0.2);
+        color: #fff;
+      }
+
+      .wr-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        transform: translateY(-1px);
+      }
+
+      .wr-btn-join:hover {
+        background: rgba(46, 204, 113, 0.2);
+        border-color: #2ecc71;
+        box-shadow: 0 2px 8px rgba(46, 204, 113, 0.3);
+      }
+
+      .wr-btn-attack:hover {
+        box-shadow: 0 4px 12px rgba(231, 76, 60, 0.4);
+      }
+
+      .wr-modal-close:hover {
+        background: rgba(255, 255, 255, 0.2);
+        color: #fff;
+      }
+
+      .wr-setting-toggle:hover {
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .wr-btn-primary:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(155, 89, 182, 0.4);
+      }
+
+      .wr-btn-secondary:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #fff;
+      }
+
+      .wr-rw-refresh-btn:hover {
+        transform: scale(1.1);
+      }
+    }
+  `
+
+  platform.addStyle(baseCSS + buttonCSS + hoverCSS)
+
+  /**********************
+   * TOAST SYSTEM
+   **********************/
 
   // Create toast container
   const toastContainer = document.createElement('div')
   toastContainer.className = `wr-toast-container ${SETTINGS.toastPosition}`
   document.body.appendChild(toastContainer)
 
-  // Toast management
   const activeToasts = new Map()
 
   function createToast(id, content, type = 'info', duration = 20000) {
     if (!toastContainer) return null
 
-    // Update existing toast
     const existingToast = activeToasts.get(id)
     if (existingToast) {
       existingToast.element.innerHTML = content
@@ -1420,7 +1695,6 @@
       return existingToast.element
     }
 
-    // Create new toast
     const toastEl = document.createElement('div')
     toastEl.className = `wr-toast wr-${type}`
     toastEl.innerHTML = content
@@ -1462,23 +1736,21 @@
       </div>
       <div class="wr-toast-message">${escapeHtml(message)}</div>
     `
-    createToast(id, content, type, 3000)
+    createToast(id, content, type, platform.isPda ? 3000 : 2000)
   }
 
   /**********************
-   * TOAST NOTIFICATIONS
+   * ATTACK TOAST RENDERING
    **********************/
 
   function showAttackToast(attack, eventType = 'Added') {
     const id = 'attack-' + attack.id
 
-    // Don't show toasts for done attacks
     if (attack.isDone) {
       removeToast(id)
       return
     }
 
-    // Skip expired attacks
     if (attack.expiration) {
       const now = new Date()
       const expiration = new Date(attack.expiration)
@@ -1488,7 +1760,6 @@
       }
     }
 
-    // Skip full attacks based on settings
     if (SETTINGS.autoHideFullAttacks && attack.isFull && !attack.link) {
       removeToast(id)
       return
@@ -1505,14 +1776,10 @@
             .join('')
         : ''
 
-    // Check if user is in attackers list
     const isUserInAttackers = attack.attackers && attack.attackers.includes(currentUsername)
     const isUserCreator = attack.createdBy === currentUsername
-
-    // Generate attack link from userId if not provided by server
     const attackLink = attack.link || (attack.userId ? `https://www.torn.com/loader.php?sid=attack&user2ID=${attack.userId}` : null)
 
-    // Only show attack button if there's a link and current user is IN the attackers list
     const shouldShowAttackBtn = attackLink && currentUsername && isUserInAttackers
     const attackBtnHtml = shouldShowAttackBtn
       ? `<button class="wr-btn wr-btn-attack" data-url="${attackLink}">
@@ -1535,7 +1802,6 @@
         </button>`
       : ''
 
-    // Only show join button if attack isn't full AND user is not already in the attackers list
     const shouldShowJoinBtn = !isFull && !isUserInAttackers
     const joinBtnHtml = shouldShowJoinBtn
       ? `<button class="wr-btn wr-btn-join" data-attack-id="${attack.id}">
@@ -1595,19 +1861,19 @@
       </div>
     `
 
-    // duration = 0 means no auto-dismiss (stays until expired/done/full)
     const toastEl = createToast(id, content, 'attack', 0)
     if (!toastEl) return
 
-    // Setup timer countdown - auto-remove when expired
+    // Setup timer countdown
     const timerSection = toastEl.querySelector('.wr-timer-section')
     const timerValue = toastEl.querySelector('.wr-timer-value')
     if (timerSection && timerValue && attack.expiration) {
-      // Clear old interval if updating existing toast
       const toastData = activeToasts.get(id)
       if (toastData && toastData.intervalId) {
         clearInterval(toastData.intervalId)
       }
+
+      const urgentThreshold = SETTINGS.urgentThresholdMinutes ?? 1
 
       const updateTimer = () => {
         const now = new Date()
@@ -1617,7 +1883,6 @@
         if (diff <= 0) {
           timerValue.textContent = 'Expired'
           timerSection.classList.remove('urgent')
-          // Auto-remove after showing "Expired" for 2 seconds
           setTimeout(() => removeToast(id), 2000)
           return false
         }
@@ -1626,7 +1891,7 @@
         const seconds = Math.floor((diff % 60000) / 1000)
         timerValue.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`
 
-        if (minutes < 1) {
+        if (minutes < urgentThreshold) {
           timerSection.classList.add('urgent')
         }
 
@@ -1640,7 +1905,6 @@
         }
       }, 1000)
 
-      // Store intervalId in toast data so it can be cleared on removal or update
       if (toastData) {
         toastData.intervalId = intervalId
       }
@@ -1651,7 +1915,7 @@
     if (attackBtn) {
       attackBtn.addEventListener('click', () => {
         const url = attackBtn.dataset.url
-        if (url) window.location.href = url
+        if (url) platform.openUrl(url)
       })
     }
 
@@ -1660,7 +1924,7 @@
       joinBtn.addEventListener('click', async () => {
         const attackId = joinBtn.dataset.attackId
         try {
-          await pdaFetch(
+          await platform.fetch(
             'POST',
             `${API_BASE}/WarRooms/participate/${attackId}`,
             {
@@ -1680,7 +1944,7 @@
       doneBtn.addEventListener('click', async () => {
         const attackId = doneBtn.dataset.attackId
         try {
-          await pdaFetch(
+          await platform.fetch(
             'POST',
             `${API_BASE}/WarRooms/end/${attackId}`,
             {
@@ -1700,12 +1964,9 @@
    **********************/
 
   function handleAttackUpdate(event) {
-    const attack = event.attack
-    if (!attack) {
-      return
-    }
+    const attack = event.attack || event
+    if (!attack) return
 
-    // Convert numeric eventType to string
     let eventType = event.eventType ?? 'Added'
     if (typeof eventType === 'number') {
       eventType = ['Added', 'Updated', 'Done'][eventType] || 'Unknown'
@@ -1713,16 +1974,19 @@
 
     const id = 'attack-' + attack.id
 
-    // If done or removed, remove the toast
     if (eventType === 'Done' || eventType === 'Removed' || attack.isDone) {
       removeToast(id)
       return
     }
 
-    // If full without link and auto-hide enabled, remove the toast
     if (SETTINGS.autoHideFullAttacks && attack.isFull && attack.link == null) {
       removeToast(id)
       return
+    }
+
+    // Play sound for new attacks
+    if (eventType === 'Added' && SETTINGS.soundEnabled) {
+      platform.playNotificationSound()
     }
 
     showAttackToast(attack, eventType)
@@ -1732,7 +1996,6 @@
     if (data.attacks && Array.isArray(data.attacks)) {
       const now = new Date()
       for (const attack of data.attacks) {
-        // Show active attacks that aren't done, expired, or (full without link)
         if (attack.isDone) continue
 
         if (attack.expiration) {
@@ -1755,26 +2018,21 @@
    * LOADER.PHP PAGE - TARGET DETECTION
    **********************/
   if (window.location.pathname.includes('/loader.php')) {
-    // Get user2ID from URL query parameters
     const urlParams = new URLSearchParams(window.location.search)
     const user2ID = urlParams.get('user2ID')
-    
+
     let detectedTarget = null
-    
+
     if (user2ID) {
-      // Function to fetch war room targets
       async function checkIfUserIsTarget() {
         try {
-          // Check cache first
           let allTargets = getCachedTargets()
 
           if (!allTargets) {
-            // Ensure we're authenticated first
             const authenticated = await ensureAuthenticated()
             if (!authenticated) return
 
-            // Fetch all targets from the new unified endpoint
-            const targetsRes = await pdaFetch(
+            const targetsRes = await platform.fetch(
               'GET',
               `${API_BASE}/warrooms/targets`,
               {
@@ -1783,8 +2041,6 @@
             )
             const warRoomTargetsData = JSON.parse(targetsRes.responseText)
 
-            // Transform the response into a flat list of targets with warRoomId
-            // Response format: [{ warRoomId, targetFaction, targets: [{ userId, userName }] }]
             allTargets = []
             for (const warRoomData of warRoomTargetsData) {
               if (warRoomData.targets && warRoomData.targets.length > 0) {
@@ -1797,24 +2053,20 @@
               }
             }
 
-            // Cache the results
             setCachedTargets(allTargets)
           }
 
-          // Check if user2ID is in the target list
           const targetMatch = allTargets.find(t => String(t.userId) === String(user2ID))
 
           if (targetMatch) {
             detectedTarget = targetMatch
             showCoordinatedAttackButton()
           }
-
         } catch {
           // Ignore errors checking war targets
         }
       }
-      
-      // Function to show coordinated attack button
+
       function showCoordinatedAttackButton() {
         const attackBtn = document.createElement('button')
         attackBtn.className = 'wr-attack-btn'
@@ -1824,24 +2076,24 @@
             <path d="M12 5v14"/>
             <path d="M5 12h14"/>
           </svg>
+          <span class="wr-attack-btn-label">Create a coordinated attack</span>
         `
         document.body.appendChild(attackBtn)
-        
+
         attackBtn.addEventListener('click', () => showAttackDialog())
       }
-      
-      // Function to show attack creation dialog
+
       function showAttackDialog() {
         if (!detectedTarget) return
-        
+
         const overlay = document.createElement('div')
         overlay.className = 'wr-modal-overlay'
-        
+
         const modal = document.createElement('div')
         modal.className = 'wr-modal'
         modal.innerHTML = `
           <div class="wr-modal-header">
-            <h2 class="wr-modal-title">🎯 Create Coordinated Attack</h2>
+            <h2 class="wr-modal-title">Create Coordinated Attack</h2>
             <button class="wr-modal-close">&times;</button>
           </div>
 
@@ -1852,8 +2104,8 @@
 
           <div class="wr-setting-group">
             <label class="wr-setting-label">Number of People Needed</label>
-            <input type="number" class="wr-setting-input" id="wr-people-needed" value="4" min="1" max="30">
-            <div class="wr-setting-desc">How many people should join (1-30)</div>
+            <input type="number" class="wr-setting-input" id="wr-people-needed" value="4" min="2" max="30">
+            <div class="wr-setting-desc">How many people should join including yourself (2-30)</div>
           </div>
 
           <div class="wr-setting-group">
@@ -1877,54 +2129,47 @@
             <button class="wr-btn-primary" id="wr-create">Create Attack</button>
           </div>
         `
-        
+
         overlay.appendChild(modal)
         document.body.appendChild(overlay)
-        
-        // Close button
+
         modal.querySelector('.wr-modal-close').addEventListener('click', () => {
           overlay.remove()
         })
-        
-        // Click outside to close
+
         overlay.addEventListener('click', (e) => {
           if (e.target === overlay) {
             overlay.remove()
           }
         })
-        
-        // Cancel button
+
         modal.querySelector('#wr-cancel').addEventListener('click', () => {
           overlay.remove()
         })
-        
-        // Toggle handler
+
         const toggleWaitFull = modal.querySelector('#wr-toggle-waitfull')
         toggleWaitFull.addEventListener('click', () => {
           const sw = toggleWaitFull.querySelector('.wr-toggle-switch')
           sw.classList.toggle('active')
         })
-        
-        // Create button
+
         modal.querySelector('#wr-create').addEventListener('click', async () => {
           const numberOfPeopleNeeded = parseInt(modal.querySelector('#wr-people-needed').value) || 4
           const expirationInMinutes = parseInt(modal.querySelector('#wr-expiration').value) || 5
           const shouldWaitUntilFullToShowLink = toggleWaitFull.querySelector('.wr-toggle-switch').classList.contains('active')
-          
-          // Validate inputs
-          if (numberOfPeopleNeeded < 1 || numberOfPeopleNeeded > 30) {
-            toast('Number of people must be between 1 and 30', 'error')
+
+          if (numberOfPeopleNeeded < 2 || numberOfPeopleNeeded > 30) {
+            toast('Number of people must be between 2 and 30', 'error')
             return
           }
-          
+
           if (expirationInMinutes < 1 || expirationInMinutes > 15) {
             toast('Expiration must be between 1 and 15 minutes', 'error')
             return
           }
-          
-          // Create attack
+
           try {
-            const res = await pdaFetch(
+            await platform.fetch(
               'POST',
               `${API_BASE}/WarRooms/${detectedTarget.warRoomId}/attack`,
               {
@@ -1940,7 +2185,7 @@
                 expirationInMinutes
               })
             )
-            
+
             overlay.remove()
             toast('Coordinated attack created successfully!', 'success')
           } catch (e) {
@@ -1949,38 +2194,32 @@
           }
         })
       }
-      
-      // Run the check
+
       checkIfUserIsTarget()
     }
   }
 
   /**********************
-   * MAIN EXECUTION FLOW
+   * SIGNALR CONNECTION MANAGEMENT
    **********************/
 
   async function setupConnection() {
-    // Set display name
-    await connection.send('SetDisplayName', 'TornPDA')
+    await connection.send('SetDisplayName', platform.displayName)
 
-    // Brief wait
     await new Promise(resolve => setTimeout(resolve, 100))
 
-    // Check if still connected
     if (!connection.running) {
       throw new Error('Connection was closed by server')
     }
 
-    // Get war rooms
     const warRooms = await connection.invoke('GetWarRooms')
     if (warRooms && Array.isArray(warRooms)) {
       warRoomIds = warRooms.map((wr) => wr.warRoomId || wr.id)
 
-      // Fetch attacks for each war room
       for (const warRoomId of warRoomIds) {
         try {
           await connection.invoke('GetAttacks', warRoomId)
-        } catch (e) {
+        } catch {
           // Ignore fetch errors
         }
       }
@@ -1989,28 +2228,21 @@
 
   async function connectToWarRoom() {
     try {
-      // Authenticate
       const authenticated = await ensureAuthenticated()
-      if (!authenticated) {
-        return
-      }
+      if (!authenticated) return
 
-      // Create SignalR connection if not already created
       if (!connection) {
         connection = new SignalRLongPollingConnection(HUB_URL, jwt)
 
-        // Register event handlers
         connection.on('AttackUpdate', handleAttackUpdate)
         connection.on('WarRoomAttacks', handleWarRoomAttacks)
         connection.on('ReceiveMessage', handleReceiveMessage)
       }
 
-      // Start connection
       if (!connection.running) {
         await connection.start()
         await setupConnection()
 
-        // Success notification
         toast('WarRoom Connected - Listening for attacks', 'success')
       }
     } catch (e) {
@@ -2032,55 +2264,34 @@
     }
   }
 
-  async function main() {
-    // Check if in TornPDA
-    if (!IS_TORN_PDA) {
-      return
-    }
-
-    // Connect to WarRoom if feed is enabled
-    if (SETTINGS.attackFeedEnabled) {
-      await connectToWarRoom()
-    }
-  }
-
   /**********************
    * RANKED WAR STATS DISPLAY
    **********************/
 
-  // Page detection
   const isFactionsPage = window.location.pathname.includes('/factions.php')
 
-  // Fetch ranked war stats from API
   let rankedWarStatsCache = null
   let rankedWarStatsCacheExpiry = 0
   let rankedWarAutoRefreshTimeout = null
-  let rankedWarAutoRefreshEnabled = true // Auto-refresh is enabled by default
+  let rankedWarAutoRefreshEnabled = true
 
-  // Function to trigger UI refresh for ranked war stats
   async function triggerRankedWarUIRefresh(isAutoRefresh = false) {
     log('RankedWar', `UI refresh triggered (${isAutoRefresh ? 'auto' : 'manual'})`)
-    
-    // Clear cache to force fresh fetch
+
     rankedWarStatsCache = null
     rankedWarStatsCacheExpiry = 0
-    
-    // Only clear the auto-refresh timeout if this is a manual refresh
-    // Let auto-refresh set up the next one naturally
+
     if (!isAutoRefresh && rankedWarAutoRefreshTimeout) {
       clearTimeout(rankedWarAutoRefreshTimeout)
       rankedWarAutoRefreshTimeout = null
     }
-    
-    // Remove existing stats from member rows
+
     document.querySelectorAll('.wr-rw-stats-container').forEach(el => el.remove())
-    // Reset points element colors
     document.querySelectorAll('.your-faction .points').forEach(el => {
       el.style.color = ''
       el.style.fontWeight = ''
     })
-    
-    // Re-run enhancement which will update the limits display
+
     await enhanceRankedWarPage()
   }
 
@@ -2090,7 +2301,6 @@
       return null
     }
 
-    // Return cached data if still valid
     const now = Date.now()
     if (rankedWarStatsCache && now < rankedWarStatsCacheExpiry) {
       log('RankedWar', `Using cached stats (expires in ${Math.round((rankedWarStatsCacheExpiry - now) / 1000)}s)`)
@@ -2099,31 +2309,27 @@
 
     try {
       log('RankedWar', 'Fetching fresh stats from API')
-      const res = await pdaFetch('GET', `${API_BASE}/rankedwars/last`, {
+      const res = await platform.fetch('GET', `${API_BASE}/rankedwars/last`, {
         'Authorization': `Bearer ${jwt}`
       })
       rankedWarStatsCache = JSON.parse(res.responseText)
 
-      // Set cache expiry based on NextUpdate field from response (max 1 hour)
-      const maxCacheMs = 60 * 60 * 1000 // 1 hour
-      
+      const maxCacheMs = 60 * 60 * 1000
+
       if (rankedWarStatsCache.nextUpdate) {
         const nextUpdateTime = new Date(rankedWarStatsCache.nextUpdate).getTime()
-        const now = Date.now()
-        rankedWarStatsCacheExpiry = Math.min(nextUpdateTime, now + maxCacheMs)
+        rankedWarStatsCacheExpiry = Math.min(nextUpdateTime, Date.now() + maxCacheMs)
 
-        // Schedule auto-refresh 1 second after nextUpdate (only if on factions page AND enabled)
         if (rankedWarAutoRefreshEnabled && isFactionsPage && window.location.search.includes('step=your')) {
           if (rankedWarAutoRefreshTimeout) {
             clearTimeout(rankedWarAutoRefreshTimeout)
           }
-          let refreshDelay = nextUpdateTime - Date.now() + 1000 // 1 second after nextUpdate
-          
-          // If nextUpdate has already passed, schedule immediate refresh (2 seconds from now)
+          let refreshDelay = nextUpdateTime - Date.now() + 1000
+
           if (refreshDelay <= 0) {
-            refreshDelay = 2000 // 2 seconds from now
+            refreshDelay = 2000
           }
-          
+
           if (refreshDelay < maxCacheMs) {
             log('RankedWar', `Scheduling auto-refresh in ${Math.round(refreshDelay / 1000)}s`)
             rankedWarAutoRefreshTimeout = setTimeout(async () => {
@@ -2134,15 +2340,9 @@
                 log('RankedWar', 'Auto-refresh failed:', err)
               }
             }, refreshDelay)
-          } else {
-            log('RankedWar', 'Auto-refresh delay exceeds maximum, not scheduling')
           }
-        } else {
-          log('RankedWar', 'Not on ranked war page, auto-refresh not scheduled')
         }
       } else {
-        log('RankedWar', 'No nextUpdate in API response')
-        // Fallback to 1 minute if NextUpdate not provided
         rankedWarStatsCacheExpiry = Date.now() + 60000
       }
 
@@ -2157,7 +2357,6 @@
     }
   }
 
-  // Check compliance against current limits
   function checkRankedWarCompliance(member, limits) {
     if (!limits) return { hits: 'neutral', total: 'neutral', avg: 'neutral' }
 
@@ -2166,7 +2365,6 @@
     const totalRespect = member.totalRespect ?? 0
     const averageRespect = member.averageRespect ?? 0
 
-    // Check hits
     if (limits.minHits != null && nbWarHits < limits.minHits) {
       result.hits = 'non-compliant'
     } else if (limits.maxHits != null && nbWarHits > limits.maxHits) {
@@ -2175,7 +2373,6 @@
       result.hits = 'compliant'
     }
 
-    // Check total respect
     if (limits.minTotalRespect != null && totalRespect < limits.minTotalRespect) {
       result.total = 'non-compliant'
     } else if (limits.maxTotalRespect != null && totalRespect > limits.maxTotalRespect) {
@@ -2184,7 +2381,6 @@
       result.total = 'compliant'
     }
 
-    // Check average respect (only if member has hits)
     if (limits.averageRespectGoal != null && nbWarHits > 0 && averageRespect < limits.averageRespectGoal) {
       result.avg = 'non-compliant'
     } else if (limits.averageRespectGoal != null && nbWarHits > 0) {
@@ -2194,23 +2390,15 @@
     return result
   }
 
-  // Format relative time (e.g., "2 minutes ago")
   function formatRelativeTime(dateString) {
     if (!dateString) return null
 
-    // Normalize timestamps with microsecond precision (6 digits) to milliseconds (3 digits)
-    // e.g., "2026-01-24T21:01:30.088026Z" -> "2026-01-24T21:01:30.088Z"
     const normalizedDateString = dateString.replace(/\.(\d{3})\d+Z$/, '.$1Z')
-
     const date = new Date(normalizedDateString)
     if (isNaN(date.getTime())) return null
 
     const now = new Date()
-    const diffMs = now.getTime() - date.getTime()
-
-    // Handle future dates (clock skew) - treat small future times as "just now"
-    // For larger clock skews, use absolute difference
-    const absDiffMs = Math.abs(diffMs)
+    const absDiffMs = Math.abs(now.getTime() - date.getTime())
 
     const diffSeconds = Math.floor(absDiffMs / 1000)
     const diffMinutes = Math.floor(diffSeconds / 60)
@@ -2230,16 +2418,13 @@
     }
   }
 
-  // Update existing limits display element
   function updateLimitsDisplay(container, limits, lastUpdated, onRefresh, members) {
     if (!container) return
 
-    // Store for later use when toggling auto-refresh
     container._lastLimits = limits
     container._lastUpdated = lastUpdated
     container._lastMembers = members
 
-    // Clear existing interval if any
     if (container._limitsUpdateInterval) {
       clearInterval(container._limitsUpdateInterval)
     }
@@ -2264,7 +2449,6 @@
     const refreshBtnHtml = onRefresh ? `<button class="wr-rw-refresh-btn ${autoRefreshClass}">${autoRefreshIcon}</button>` : ''
     const updatedHtml = relativeTime ? `<div class="wr-rw-limits-footer"><span class="wr-rw-limits-updated">Last data update: ${escapeHtml(relativeTime)}</span>${refreshBtnHtml}</div>` : ''
 
-    // Find current user's stats from members array
     let myStatsHtml = ''
     if (members && currentUserId) {
       const myMember = members.find(m => String(m.id) === String(currentUserId))
@@ -2285,8 +2469,8 @@
         const hitsText = limits.minHits != null && limits.maxHits != null
           ? `${limits.minHits}-${limits.maxHits}`
           : limits.minHits != null
-            ? `≥${limits.minHits}`
-            : `≤${limits.maxHits}`
+            ? `\u2265${limits.minHits}`
+            : `\u2264${limits.maxHits}`
         items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Number of Hits: </span><span class="wr-rw-limits-value">${escapeHtml(hitsText)}</span></span>`)
       }
 
@@ -2294,44 +2478,38 @@
         const totalText = limits.minTotalRespect != null && limits.maxTotalRespect != null
           ? `${limits.minTotalRespect.toFixed(1)}-${limits.maxTotalRespect.toFixed(1)}`
           : limits.minTotalRespect != null
-            ? `≥${limits.minTotalRespect.toFixed(1)}`
-            : `≤${limits.maxTotalRespect.toFixed(1)}`
+            ? `\u2265${limits.minTotalRespect.toFixed(1)}`
+            : `\u2264${limits.maxTotalRespect.toFixed(1)}`
         items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Total Respect: </span><span class="wr-rw-limits-value">${escapeHtml(totalText)}</span></span>`)
       }
 
       if (limits.averageRespectGoal != null) {
-        items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Average Respect: </span><span class="wr-rw-limits-value">≥${escapeHtml(limits.averageRespectGoal.toFixed(2))}</span></span>`)
+        items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Average Respect: </span><span class="wr-rw-limits-value">\u2265${escapeHtml(limits.averageRespectGoal.toFixed(2))}</span></span>`)
       }
 
       container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${myStatsHtml}${updatedHtml}`
     }
 
-    // Set up refresh button click handler
     if (onRefresh) {
       const refreshBtn = container.querySelector('.wr-rw-refresh-btn')
       if (refreshBtn) {
-        // Store the onRefresh function on container to prevent duplicates
         container._onRefresh = onRefresh
-        
+
         refreshBtn.addEventListener('click', async (e) => {
-          // Prevent concurrent refreshes
           if (container._isRefreshing) {
             log('RankedWar', 'Refresh already in progress, ignoring click')
             return
           }
-          
+
           e.preventDefault()
           e.stopPropagation()
-          
-          // Remove focus to close tooltip
+
           if (document.activeElement) {
             document.activeElement.blur()
           }
           refreshBtn.blur()
-          
-          // Toggle auto-refresh state
+
           if (rankedWarAutoRefreshEnabled) {
-            // Disable auto-refresh
             rankedWarAutoRefreshEnabled = false
             if (rankedWarAutoRefreshTimeout) {
               clearTimeout(rankedWarAutoRefreshTimeout)
@@ -2339,16 +2517,14 @@
             }
             log('RankedWar', 'Auto-refresh disabled')
             toast('Auto-refresh disabled', 'info')
-            // Update button appearance immediately
             updateLimitsDisplay(container, container._lastLimits, container._lastUpdated, container._onRefresh, container._lastMembers)
           } else {
-            // Re-enable auto-refresh and do a manual refresh
             rankedWarAutoRefreshEnabled = true
             log('RankedWar', 'Auto-refresh re-enabled, triggering refresh')
-            
+
             container._isRefreshing = true
             refreshBtn.classList.add('loading')
-            
+
             try {
               await container._onRefresh()
               toast('Auto-refresh enabled', 'success')
@@ -2356,17 +2532,14 @@
               log('RankedWar', 'Refresh error:', err)
             } finally {
               container._isRefreshing = false
-              // Button will be recreated by update, so no need to remove loading class
             }
           }
         })
       }
     }
 
-    // Set up dynamic time update for "Last data update" timestamp
     if (lastUpdated) {
       const updateInterval = setInterval(() => {
-        // Stop updating if element is no longer in DOM
         if (!container.isConnected) {
           clearInterval(updateInterval)
           return
@@ -2381,12 +2554,10 @@
         }
       }, 1000)
 
-      // Store interval ID for cleanup
       container._limitsUpdateInterval = updateInterval
     }
   }
 
-  // Create limits display element
   function createLimitsDisplay(limits, lastUpdated, onRefresh, members) {
     const container = document.createElement('div')
     container.className = 'wr-rw-limits'
@@ -2394,16 +2565,13 @@
     return container
   }
 
-  // Add stats to member row and color the points element
   function addStatsToMemberRow(row, member, limits) {
-    // Check if already added
     if (row.querySelector('.wr-rw-stats-container')) return
 
     const compliance = checkRankedWarCompliance(member, limits)
     const nbWarHits = member.nbWarHits ?? 0
     const averageRespect = member.averageRespect ?? 0
 
-    // Color the existing .points element based on total respect compliance
     const pointsEl = row.querySelector('.points')
     if (pointsEl) {
       if (compliance.total === 'compliant') {
@@ -2414,7 +2582,6 @@
       }
     }
 
-    // Add stats container with hits and average respect
     const statsContainer = document.createElement('div')
     statsContainer.className = 'wr-rw-stats-container'
     statsContainer.innerHTML = `
@@ -2425,15 +2592,12 @@
     row.appendChild(statsContainer)
   }
 
-  // Extract username from member row
   function extractUsernameFromRow(row) {
-    // Try .honor-text element first (contains plain text username)
     const honorText = row.querySelector('.honor-text:not(.honor-text-svg)')
     if (honorText) {
       return honorText.textContent.trim()
     }
 
-    // Fallback: try aria-label on status element
     const statusEl = row.querySelector('[aria-label*="User "]')
     if (statusEl) {
       const match = statusEl.getAttribute('aria-label').match(/User (\S+)/)
@@ -2443,27 +2607,22 @@
     return null
   }
 
-  // Main function to enhance ranked war page
   async function enhanceRankedWarPage() {
-    // Wait for the faction war list to be present
     const factionWarList = document.getElementById('faction_war_list_id')
     if (!factionWarList) return
 
-    // Ensure we're authenticated before fetching stats
     const authenticated = await ensureAuthenticated()
     if (!authenticated) {
       log('RankedWar', 'Not authenticated, cannot fetch stats')
       return
     }
 
-    // Fetch stats from API
     const statsData = await fetchRankedWarStats()
     if (!statsData) {
       log('RankedWar', 'No stats data returned from API')
       return
     }
 
-    // Create a map of members by name for quick lookup (case-insensitive)
     const membersByName = new Map()
     if (statsData.members) {
       for (const member of statsData.members) {
@@ -2472,20 +2631,17 @@
     }
     log('RankedWar', `Loaded ${membersByName.size} members, limits:`, statsData.currentLimit)
 
-    // Find and enhance the your-faction section
     const yourFactionSection = document.querySelector('.your-faction')
     if (!yourFactionSection) {
       log('RankedWar', 'Could not find .your-faction section')
       return
     }
 
-    // Refresh function to manually update stats
     const refreshStats = async () => {
       log('RankedWar', 'Manual refresh triggered')
       await triggerRankedWarUIRefresh()
     }
 
-    // Add or update limits display below faction-war-info
     const factionWarInfo = document.querySelector('.faction-war-info')
     let limitsDisplay = document.querySelector('.wr-rw-limits')
 
@@ -2498,11 +2654,8 @@
         log('RankedWar', 'Updating existing limits display')
         updateLimitsDisplay(limitsDisplay, statsData.currentLimit, statsData.lastUpdated, refreshStats, statsData.members)
       }
-    } else {
-      log('RankedWar', 'Could not find .faction-war-info element')
     }
 
-    // Find all member rows in your faction (only if setting enabled)
     if (SETTINGS.showMemberStatsOnRankedWar) {
       const memberRows = yourFactionSection.querySelectorAll('li.your')
       log('RankedWar', `Found ${memberRows.length} member rows to enhance`)
@@ -2511,7 +2664,6 @@
         const username = extractUsernameFromRow(row)
         if (!username) continue
 
-        // Get member data or create default with zeros (case-insensitive lookup)
         const memberData = membersByName.get(username.toLowerCase()) || {
           name: username,
           nbWarHits: 0,
@@ -2527,67 +2679,69 @@
 
   // Initialize ranked war enhancement with MutationObserver
   if (isFactionsPage && window.location.search.includes('step=your')) {
-    let rankedWarEnhanced = false
+    let rankedWarEnhancementInProgress = null
     let rankedWarObserver = null
+
+    function tryEnhanceRankedWar() {
+      const factionWarList = document.getElementById('faction_war_list_id')
+      if (!factionWarList || !window.location.hash.includes('/war/rank')) {
+        return Promise.resolve(false)
+      }
+
+      if (rankedWarEnhancementInProgress) {
+        return rankedWarEnhancementInProgress
+      }
+
+      if (rankedWarObserver) {
+        rankedWarObserver.disconnect()
+        rankedWarObserver = null
+      }
+
+      const enhancePromise = (async () => {
+        try {
+          await enhanceRankedWarPage()
+          return true
+        } catch (err) {
+          log('RankedWar', 'Enhancement failed:', err)
+          rankedWarEnhancementInProgress = null
+          return false
+        }
+      })()
+
+      rankedWarEnhancementInProgress = enhancePromise
+      return enhancePromise
+    }
 
     function setupRankedWarObserver() {
       if (rankedWarObserver) return
 
       rankedWarObserver = new MutationObserver(() => {
-        if (rankedWarEnhanced) return
-
-        const factionWarList = document.getElementById('faction_war_list_id')
-        if (factionWarList && window.location.hash.includes('/war/rank')) {
-          rankedWarEnhanced = true
-          rankedWarObserver.disconnect()
-          rankedWarObserver = null
-          enhanceRankedWarPage()
-        }
+        tryEnhanceRankedWar()
       })
 
       rankedWarObserver.observe(document.body, { childList: true, subtree: true })
     }
 
-    // Listen for hash changes (SPA navigation)
     window.addEventListener('hashchange', () => {
       if (window.location.hash.includes('/war/rank')) {
-        // Reset state for new navigation
-        rankedWarEnhanced = false
-        // Small delay to let DOM update, then try to enhance
+        rankedWarEnhancementInProgress = null
         setTimeout(() => {
-          if (!rankedWarEnhanced) {
-            setupRankedWarObserver()
-            // Also try immediately in case DOM is ready
-            const factionWarList = document.getElementById('faction_war_list_id')
-            if (factionWarList) {
-              rankedWarEnhanced = true
-              if (rankedWarObserver) {
-                rankedWarObserver.disconnect()
-                rankedWarObserver = null
-              }
-              enhanceRankedWarPage()
+          tryEnhanceRankedWar().then(success => {
+            if (!success) {
+              setupRankedWarObserver()
             }
-          }
+          })
         }, 500)
       }
     })
 
-    // Initial check
     if (window.location.hash.includes('/war/rank')) {
-      setupRankedWarObserver()
-      setTimeout(() => {
-        if (!rankedWarEnhanced) {
-          const factionWarList = document.getElementById('faction_war_list_id')
-          if (factionWarList) {
-            rankedWarEnhanced = true
-            if (rankedWarObserver) {
-              rankedWarObserver.disconnect()
-              rankedWarObserver = null
-            }
-            enhanceRankedWarPage()
-          }
+      tryEnhanceRankedWar().then(success => {
+        if (!success) {
+          setupRankedWarObserver()
+          setTimeout(tryEnhanceRankedWar, 1000)
         }
-      }, 1000)
+      })
     }
   }
 
@@ -2600,22 +2754,35 @@
 
     const modal = document.createElement('div')
     modal.className = 'wr-modal'
+
+    // Build settings fields conditionally
+    const apiKeyField = !platform.isPda ? `
+      <div class="wr-setting-group">
+        <label class="wr-setting-label">API Key</label>
+        <input type="text" class="wr-setting-input" id="wr-apikey" value="${escapeHtml(SETTINGS.apiKey)}" placeholder="Enter your WarRoom API key">
+        <div class="wr-setting-desc">Required for authentication. Use a public apiKey from Torn</div>
+      </div>
+    ` : ''
+
+    const soundField = !platform.isPda ? `
+      <div class="wr-setting-group">
+        <div class="wr-setting-toggle" id="wr-toggle-sound">
+          <span class="wr-toggle-label">Sound Notifications</span>
+          <div class="wr-toggle-switch ${SETTINGS.soundEnabled ? 'active' : ''}">
+            <div class="wr-toggle-slider"></div>
+          </div>
+        </div>
+        <div class="wr-setting-desc">Play sound when new attacks are added</div>
+      </div>
+    ` : ''
+
     modal.innerHTML = `
       <div class="wr-modal-header">
-        <h2 class="wr-modal-title">⚙️ WarRoom Settings</h2>
+        <h2 class="wr-modal-title">WarRoom Settings</h2>
         <button class="wr-modal-close">&times;</button>
       </div>
 
-      <div class="wr-setting-group">
-        <label class="wr-setting-label">Toast Position</label>
-        <select class="wr-setting-input" id="wr-toast-position">
-          <option value="bottom-left" ${SETTINGS.toastPosition === 'bottom-left' ? 'selected' : ''}>Bottom Left</option>
-          <option value="bottom-right" ${SETTINGS.toastPosition === 'bottom-right' ? 'selected' : ''}>Bottom Right</option>
-          <option value="top-left" ${SETTINGS.toastPosition === 'top-left' ? 'selected' : ''}>Top Left</option>
-          <option value="top-right" ${SETTINGS.toastPosition === 'top-right' ? 'selected' : ''}>Top Right</option>
-        </select>
-        <div class="wr-setting-desc">Choose where notifications appear on screen</div>
-      </div>
+      ${apiKeyField}
 
       <div class="wr-setting-group">
         <div class="wr-setting-toggle" id="wr-toggle-feed">
@@ -2637,6 +2804,8 @@
         <div class="wr-setting-desc">Automatically hide attacks when they become full</div>
       </div>
 
+      ${soundField}
+
       <div class="wr-setting-group">
         <div class="wr-setting-toggle" id="wr-toggle-memberstats">
           <span class="wr-toggle-label">Show Member Stats on Ranked War</span>
@@ -2647,9 +2816,33 @@
         <div class="wr-setting-desc">Show hits/avg respect for all members in /war/rank</div>
       </div>
 
+      <div class="wr-setting-group">
+        <label class="wr-setting-label">Toast Position</label>
+        <select class="wr-setting-input" id="wr-toast-position">
+          <option value="bottom-left" ${SETTINGS.toastPosition === 'bottom-left' ? 'selected' : ''}>Bottom Left</option>
+          <option value="bottom-right" ${SETTINGS.toastPosition === 'bottom-right' ? 'selected' : ''}>Bottom Right</option>
+          <option value="top-left" ${SETTINGS.toastPosition === 'top-left' ? 'selected' : ''}>Top Left</option>
+          <option value="top-right" ${SETTINGS.toastPosition === 'top-right' ? 'selected' : ''}>Top Right</option>
+        </select>
+        <div class="wr-setting-desc">Choose where notifications appear on screen</div>
+      </div>
+
+       <div class="wr-setting-group">
+        <label class="wr-setting-label">Button Position</label>
+        <select class="wr-setting-input" id="wr-button-position">
+          <option value="bottom-left" ${SETTINGS.buttonPosition === 'bottom-left' ? 'selected' : ''}>Bottom Left</option>
+          <option value="bottom-right" ${SETTINGS.buttonPosition === 'bottom-right' ? 'selected' : ''}>Bottom Right</option>
+          <option value="top-left" ${SETTINGS.buttonPosition === 'top-left' ? 'selected' : ''}>Top Left</option>
+          <option value="top-right" ${SETTINGS.buttonPosition === 'top-right' ? 'selected' : ''}>Top Right</option>
+          <option value="inside-header-menu" ${SETTINGS.buttonPosition === 'inside-header-menu' ? 'selected' : ''}>Header Menu (Mobile only)</option>
+        </select>
+        <div class="wr-setting-desc">Choose where control buttons appear on screen</div>
+      </div>
+
       <div class="wr-modal-footer">
         <button class="wr-btn-secondary" id="wr-clear-cache">Clear Cache</button>
         <button class="wr-btn-secondary" id="wr-clear-token">Clear Token</button>
+        <button class="wr-btn-secondary" id="wr-reset">Reset</button>
         <button class="wr-btn-primary" id="wr-save">Save</button>
       </div>
     `
@@ -2662,7 +2855,6 @@
       overlay.remove()
     })
 
-    // Click outside to close
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
         overlay.remove()
@@ -2672,37 +2864,56 @@
     // Toggle handlers
     const toggleFeed = modal.querySelector('#wr-toggle-feed')
     toggleFeed.addEventListener('click', () => {
-      const sw = toggleFeed.querySelector('.wr-toggle-switch')
-      sw.classList.toggle('active')
+      toggleFeed.querySelector('.wr-toggle-switch').classList.toggle('active')
     })
 
     const toggleAutoHide = modal.querySelector('#wr-toggle-autohide')
     toggleAutoHide.addEventListener('click', () => {
-      const sw = toggleAutoHide.querySelector('.wr-toggle-switch')
-      sw.classList.toggle('active')
+      toggleAutoHide.querySelector('.wr-toggle-switch').classList.toggle('active')
     })
 
     const toggleMemberStats = modal.querySelector('#wr-toggle-memberstats')
     toggleMemberStats.addEventListener('click', () => {
-      const sw = toggleMemberStats.querySelector('.wr-toggle-switch')
-      sw.classList.toggle('active')
+      toggleMemberStats.querySelector('.wr-toggle-switch').classList.toggle('active')
     })
+
+    // Desktop-only toggles
+    const toggleLoader = modal.querySelector('#wr-toggle-loader')
+    if (toggleLoader) {
+      toggleLoader.addEventListener('click', () => {
+        toggleLoader.querySelector('.wr-toggle-switch').classList.toggle('active')
+      })
+    }
+
+    const toggleSound = modal.querySelector('#wr-toggle-sound')
+    if (toggleSound) {
+      toggleSound.addEventListener('click', () => {
+        toggleSound.querySelector('.wr-toggle-switch').classList.toggle('active')
+      })
+    }
 
     // Save button
     modal.querySelector('#wr-save').addEventListener('click', async () => {
       const newSettings = {
+        ...SETTINGS,
         toastPosition: modal.querySelector('#wr-toast-position').value,
         attackFeedEnabled: toggleFeed.querySelector('.wr-toggle-switch').classList.contains('active'),
         autoHideFullAttacks: toggleAutoHide.querySelector('.wr-toggle-switch').classList.contains('active'),
-        showMemberStatsOnRankedWar: toggleMemberStats.querySelector('.wr-toggle-switch').classList.contains('active')
+        showMemberStatsOnRankedWar: toggleMemberStats.querySelector('.wr-toggle-switch').classList.contains('active'),
+        buttonPosition: modal.querySelector('#wr-button-position').value,
+      }
+
+      // Desktop-only settings
+      if (!platform.isPda) {
+        newSettings.apiKey = modal.querySelector('#wr-apikey').value.trim()
+        newSettings.soundEnabled = toggleSound.querySelector('.wr-toggle-switch').classList.contains('active')
       }
 
       if (saveSettings(newSettings)) {
         const oldFeedEnabled = SETTINGS.attackFeedEnabled
         SETTINGS = newSettings
         overlay.remove()
-        
-        // Handle feed connection change
+
         if (oldFeedEnabled !== SETTINGS.attackFeedEnabled) {
           if (SETTINGS.attackFeedEnabled) {
             await connectToWarRoom()
@@ -2710,7 +2921,7 @@
             disconnectFromWarRoom()
           }
         }
-        
+
         toast('Settings saved! Reload page for full effect.', 'success')
       } else {
         toast('Failed to save settings', 'error')
@@ -2728,89 +2939,144 @@
 
     // Clear token button
     modal.querySelector('#wr-clear-token').addEventListener('click', () => {
-      clearStoredToken()
-      jwt = null
-      currentUsername = null
-      if (connection) {
-        connection.stop()
-        connection = null
+      if (platform.confirm('Clear authentication token? You will need to reload the page to reconnect.')) {
+        clearStoredToken()
+        jwt = null
+        currentUsername = null
+        if (connection) {
+          connection.stop()
+          connection = null
+        }
+        toast('Token cleared! Reload page to re-authenticate.', 'success')
       }
-      toast('Token cleared! Reload page to re-authenticate.', 'success')
-      setTimeout(() => {
-        overlay.remove()
-      }, 1000)
     })
+
+    // Reset button (desktop only)
+    const resetBtn = modal.querySelector('#wr-reset')
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        if (platform.confirm('Reset all settings to defaults?')) {
+          if (saveSettings(DEFAULT_SETTINGS)) {
+            SETTINGS = { ...DEFAULT_SETTINGS }
+            overlay.remove()
+            toast('Settings reset! Reload page.', 'success')
+          }
+        }
+      })
+    }
   }
 
-  // Settings button (only show in PDA environment)
-  if (IS_TORN_PDA) {
-    const settingsBtn = document.createElement('button')
-    settingsBtn.className = 'wr-settings-btn'
-    settingsBtn.title = 'Settings'
-    settingsBtn.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M12 1v6m0 6v6m9-9h-6m-6 0H3m15.364 6.364l-4.243-4.243m-6 0L3.636 18.364m16.728 0l-4.243-4.243m-6 0L3.636 5.636"/>
-      </svg>
-    `
-    document.body.appendChild(settingsBtn)
+  /**********************
+   * UI BUTTONS
+   **********************/
 
-    settingsBtn.addEventListener('click', () => {
-      showSettingsModal()
-    })
+  // Settings button
+  const settingsBtn = document.createElement('button')
+  settingsBtn.className = `wr-settings-btn ${SETTINGS.buttonPosition}`
+  settingsBtn.title = 'Settings'
+  settingsBtn.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M12 1v6m0 6v6m9-9h-6m-6 0H3m15.364 6.364l-4.243-4.243m-6 0L3.636 18.364m16.728 0l-4.243-4.243m-6 0L3.636 5.636"/>
+    </svg>
+  `
+  document.body.appendChild(settingsBtn)
 
-    // Feed toggle button
-    const feedToggleBtn = document.createElement('button')
-    feedToggleBtn.className = 'wr-feed-toggle-btn'
-    feedToggleBtn.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-        <line class="wr-bell-cross" x1="4" y1="4" x2="20" y2="20" stroke-width="2.5" style="display: none;"/>
-      </svg>
-    `
-    document.body.appendChild(feedToggleBtn)
+  settingsBtn.addEventListener('click', () => {
+    showSettingsModal()
+  })
 
-    // Update button state based on settings
-    const updateFeedToggleState = () => {
-      const cross = feedToggleBtn.querySelector('.wr-bell-cross')
-      
-      if (SETTINGS.attackFeedEnabled) {
-        feedToggleBtn.classList.remove('disabled')
-        feedToggleBtn.title = 'Attack Feed: ON (click to disable)'
-        if (cross) cross.style.display = 'none'
-      } else {
-        feedToggleBtn.classList.add('disabled')
-        feedToggleBtn.title = 'Attack Feed: OFF (click to enable)'
-        if (cross) cross.style.display = 'block'
-      }
+  let feedToggleBtn = null
+  let updateFeedToggleState = null
+
+  feedToggleBtn = document.createElement('button')
+  feedToggleBtn.className = `wr-feed-toggle-btn ${SETTINGS.buttonPosition}`
+  feedToggleBtn.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+      <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+      <line class="wr-bell-cross" x1="4" y1="4" x2="20" y2="20" stroke-width="2.5" style="display: none;"/>
+    </svg>
+  `
+  document.body.appendChild(feedToggleBtn)
+
+  updateFeedToggleState = (status = 'idle') => {
+    const cross = feedToggleBtn.querySelector('.wr-bell-cross')
+
+    feedToggleBtn.classList.remove('disabled', 'connecting')
+
+    if (status === 'connecting') {
+      feedToggleBtn.classList.add('connecting')
+      feedToggleBtn.title = 'Connecting to WarRoom...'
+      if (cross) cross.style.display = 'none'
+    } else if (SETTINGS.attackFeedEnabled) {
+      feedToggleBtn.title = 'Attack Feed: ON (click to disable)'
+      if (cross) cross.style.display = 'none'
+    } else {
+      feedToggleBtn.classList.add('disabled')
+      feedToggleBtn.title = 'Attack Feed: OFF (click to enable)'
+      if (cross) cross.style.display = 'block'
     }
-    
-    // Set initial state
+  }
+
+  updateFeedToggleState()
+
+  feedToggleBtn.addEventListener('click', async () => {
+    SETTINGS.attackFeedEnabled = !SETTINGS.attackFeedEnabled
+    saveSettings(SETTINGS)
+
     updateFeedToggleState()
 
-    feedToggleBtn.addEventListener('click', async () => {
-      SETTINGS.attackFeedEnabled = !SETTINGS.attackFeedEnabled
-      saveSettings(SETTINGS)
-      
-      // Update button state immediately
-      updateFeedToggleState()
-      
-      if (SETTINGS.attackFeedEnabled) {
-        await connectToWarRoom()
-      } else {
-        disconnectFromWarRoom()
+    if (SETTINGS.attackFeedEnabled) {
+      if (updateFeedToggleState) {
+        updateFeedToggleState('connecting')
+      }
+      await connectToWarRoom()
+      if (updateFeedToggleState) {
+        updateFeedToggleState()
+      }
+    } else {
+      disconnectFromWarRoom()
+    }
+  })
+  
+  /**********************
+   * INITIALIZATION
+   **********************/
+
+  // Authenticate
+  const apiKey = platform.getApiKey()
+  if (!platform.isPda && !apiKey) {
+    showSettingsModal()
+  } else {
+    await ensureAuthenticated()
+  }
+
+  // Start SignalR connection
+  if (SETTINGS.attackFeedEnabled) {
+    if (updateFeedToggleState) {
+      updateFeedToggleState('connecting')
+    }
+
+    connectToWarRoom().then(() => {
+      if (updateFeedToggleState) {
+        updateFeedToggleState()
+      }
+    }).catch(() => {
+      if (updateFeedToggleState) {
+        updateFeedToggleState()
       }
     })
   }
 
-  // Cleanup on page unload
+  /**********************
+   * CLEANUP ON PAGE UNLOAD
+   **********************/
   window.addEventListener('beforeunload', () => {
     if (connection) {
       connection.stop()
     }
 
-    // Clear all toast timers to prevent memory leaks
     for (const toastData of activeToasts.values()) {
       if (toastData.timeoutId) clearTimeout(toastData.timeoutId)
       if (toastData.intervalId) clearInterval(toastData.intervalId)
@@ -2818,9 +3084,9 @@
     activeToasts.clear()
   })
 
-  // Start script
-  main().catch((e) => {
-    log('Main', 'Fatal error', e)
-    toast('Fatal error: ' + e.message, 'error')
-  })
+  // Post-initialization hook (debug exposure, console banner, etc.)
+  platform.onInitialized(connection)
+}
+
+  await initWarRoom(platform)
 })()

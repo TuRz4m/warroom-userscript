@@ -1,232 +1,186 @@
-# TuRzAm WarRoom Connector
+# RR - Torn War Helper
 
-A Tampermonkey userscript that enhances the [Torn.com](https://www.torn.com) gaming experience by connecting to the TuRzAm WarRoom service for real-time coordinated faction attacks.
+A userscript that enhances the Torn City war experience by providing real-time attack notifications and comprehensive ranked war statistics.
 
-> **Looking for the TornPDA mobile version?** See [README-PDA.md](README-PDA.md)
+![WarRoom Banner](img/banner.png)
 
-## 🎯 Overview
+## Features
 
-This userscript integrates seamlessly with Torn.com to provide faction members with real-time attack coordination capabilities. It displays coordinated attack notifications directly within Torn's interface, allowing faction members to participate in synchronized attacks against targets.
+### 🎯 Real-Time Attack Coordination
+- **Live Attack Feed**: Receive instant notifications when faction members create coordinated attacks
+- **Smart Notifications**: Toast-style alerts with countdown timers showing time remaining
+- **Quick Actions**: Join attacks, mark as done, or launch attacks directly from notifications
+- **Auto-Hide**: Automatically hide full attacks to keep your feed clean
+- **Participant Tracking**: See who's joining each attack in real-time
 
-## ✨ Key Features
+![Attack Notifications](img/attack-toast.png)
 
-### Real-Time Attack Notifications
-- **Live Attack Feed**: Displays toast notifications for coordinated attacks on the factions page and optionally on attack pages
-- **Attack Card Display**: Shows detailed information for each coordinated attack including:
-  - Target name and ID
-  - Attack status (Active/Full)
-  - Countdown timer with urgent warnings (under 1 minute)
-  - Participant slots (filled/total)
-  - List of participating members
-  - Attack creator information
+### 📊 Enhanced Ranked War Statistics
+- **Live Stats Display**: View current war limits and requirements directly on the ranked war page
+- **Member Performance**: See individual member stats including hits and average respect
+- **Compliance Tracking**: Visual indicators showing who meets/exceeds war requirements
+- **Auto-Refresh**: Configurable automatic data refresh to keep stats current
+- **Personal Stats**: Quick view of your own performance in the current war
 
-### Attack Management
-- **Join Attacks**: One-click join functionality for available coordinated attacks
-- **Create Coordinated Attacks**: Create new coordinated attacks when viewing a target from your faction's war room list
-- **Mark as Done**: Mark attacks as complete when finished
-- **Direct Attack Links**: Quick access to attack pages for joined attacks
-- **Auto-Hide Full Attacks**: Automatically removes full attacks from the feed (configurable)
+![Ranked War Stats](img/ranked-war-stats.png)
 
-### Attack Creation
-When viewing a target's attack page (via `https://www.torn.com/loader.php`), if the target is in your faction's war room target list, you can create a coordinated attack with:
-- Custom number of participants (1-30)
-- Expiration time (1-15 minutes)
-- Option to wait until full before showing attack link
-- Creator automatically joins the attack
+### ⚙️ Highly Configurable
+- **Flexible Positioning**: Place notifications and controls anywhere on screen
+  - Bottom Left/Right
+  - Top Left/Right
+- **Sound Notifications**: Optional audio alerts for new attacks (desktop only)
+- **Toggle Features**: Enable/disable individual features as needed
+- **Persistent Settings**: Your preferences are saved automatically
+
+![Settings Modal](img/settings.png)
+
+## Installation
+
+### Prerequisites
+1. **Tampermonkey** browser extension
+   - [Chrome](https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
+   - [Firefox](https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/)
+   - [Edge](https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd)
+   - [Safari](https://apps.apple.com/us/app/tampermonkey/id1482490089)
+
+2. **Torn API Key** (public level is sufficient)
+   - Get yours at: https://www.torn.com/preferences.php#tab=api
+
+### Install Script
+1. Click here to install: [Install RR - Torn War Helper](https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/warroom.user.js)
+2. Tampermonkey will open showing the script
+3. Click **Install**
+4. Navigate to any Torn page
+5. Click the ⚙️ settings button that appears
+6. Enter your Torn API key
+7. Configure your preferences
+8. Click **Save**
+
+## Usage
+
+### Attack Notifications
+
+The script will automatically show notifications when:
+- A faction member creates a coordinated attack
+- An attack is updated (someone joins)
+- An attack becomes full
+
+Each notification shows:
+- Target name and ID
+- Time remaining (with urgent warning when < 1 minute)
+- Number of participants (filled/total)
+- List of participants
+- Action buttons:
+  - **Join**: Join the attack
+  - **Attack**: Launch the attack (only if you've joined)
+  - **Done**: Mark the attack as complete
+
+### Creating Coordinated Attacks
+
+When viewing a target's profile:
+1. A "Coordinated Attack" button appears below the attack section
+2. Click it to open the dialog
+3. Set:
+   - Number of people needed (2-30)
+   - Expiration time (1-15 minutes)
+   - Wait until full option
+4. Click **Create**
+5. The attack is shared with all faction members using WarRoom
 
 ### Ranked War Stats
-On the faction ranked war page (`/factions.php?step=your#/war/rank`):
-- **Limits Display**: Shows current war limits (hits, total respect, average respect goals)
-- **Member Stats**: Displays each member's war hits and average respect
-- **Compliance Coloring**: Green for compliant, red for non-compliant stats
-- **Auto-Refresh**: Stats cached until next update from server
 
-### Smart Notifications
-- **Visual Countdown Timer**: Real-time countdown for each attack with urgent highlighting when time is running low
-- **Sound Alerts**: Optional audio notification when new attacks are created (configurable)
-- **Status Badges**: Visual indicators for attack status (Active/Full)
-- **Automatic Expiration**: Attacks are automatically removed when expired
+When on the ranked war page (`/factions.php?step=your#/war/rank`):
+- Current war limits display automatically at the top
+- Each member row shows:
+  - Number of hits (color-coded for compliance)
+  - Average respect (color-coded for compliance)
+- Your personal stats are highlighted
+- Click the refresh button to manually update stats
+- Toggle auto-refresh with the button icon
 
-### Customizable Settings
-Access the settings panel to configure:
-- **API Key**: Your WarRoom authentication key
-- **Attack Feed Toggle**: Enable/disable attack notifications on faction page
-- **Attack Page Feed**: Show/hide notifications on attack pages (loader.php)
-- **Auto-Hide Full Attacks**: Automatically hide attacks when they reach capacity
-- **Sound Notifications**: Enable/disable audio alerts for new attacks
-- **Button/Toast Position**: Choose corner placement (bottom-left, bottom-right, top-left, top-right)
-- **Target Cache Management**: Clear cached war room target data
-- **Token Management**: Clear authentication tokens when needed
+### Settings
 
-### User Interface
-- **Non-Intrusive Toast Notifications**: Stylish, glassmorphic toast cards
-- **Floating Action Buttons**: Quick access buttons for:
-  - Attack feed toggle (enable/disable notifications)
-  - Settings configuration
-  - Create coordinated attack (on attack pages with valid targets)
-- **Modern Design**: Purple-themed UI with smooth animations and transitions
-- **Configurable Position**: Place buttons and toasts in any corner
+Access settings via the ⚙️ button. Available options:
 
-## 📋 Requirements
+**General**
+- **API Key**: Your Torn API key (required, desktop only)
+- **Attack Feed**: Enable/disable attack notifications
+- **Auto-hide Full Attacks**: Automatically hide completed attacks
 
-- [Tampermonkey](https://www.tampermonkey.net/) browser extension (or compatible userscript manager)
-- Active account on [Torn.com](https://www.torn.com)
-- TuRzAm WarRoom API key (obtainable from [torn.zzcraft.net](https://torn.zzcraft.net))
-- Faction membership with access to war rooms
+**Notifications**
+- **Sound Notifications**: Play sound for new attacks (desktop only)
+- **Toast Position**: Where notifications appear (4 corners)
 
-## 🚀 Installation
+**Ranked War**
+- **Show Member Stats**: Display performance stats on ranked war page
 
-1. Install [Tampermonkey](https://www.tampermonkey.net/) for your browser
-2. Click on the Tampermonkey icon and select "Create a new script"
-3. Copy the contents of `warroom.user.js` and paste it into the editor
-4. Save the script (Ctrl+S or Cmd+S)
-5. The script will automatically activate on Torn.com
+**Interface**
+- **Button Position**: Where control buttons appear (4 corners)
 
-## ⚙️ Configuration
+**Maintenance**
+- **Clear Cache**: Remove cached target data
+- **Clear Token**: Force re-authentication
+- **Reset**: Restore default settings
 
-1. Navigate to any Torn.com page where the script is active
-2. Click the settings button (gear icon) in the corner
-3. Enter your WarRoom API key in the API Key field
-4. Configure your preferences:
-   - Enable/disable attack feed on faction page
-   - Enable/disable attack feed on attack pages
-   - Toggle auto-hide for full attacks
-   - Enable/disable sound notifications
-   - Choose button/toast position
-5. Click "Save" to apply your settings
-6. Refresh the page for changes to take full effect
+## Controls
 
-## 📖 Usage
+### Main Buttons
 
-### Viewing Coordinated Attacks
-1. Navigate to the Factions page (`https://www.torn.com/factions.php`)
-2. Active coordinated attacks will appear as toast notifications
-3. Each attack card shows:
-   - Target information
-   - Time remaining
-   - Current participants
-   - Available slots
+| Button | Function | Default Position |
+|--------|----------|------------------|
+| 🔔 | Toggle attack feed on/off | Bottom-left |
+| ⚙️ | Open settings | Bottom-left + 46px |
 
-### Joining an Attack
-1. Click the "Join" button on any available attack notification
-2. You'll receive a confirmation message
-3. The attack card will update to show you as a participant
-4. Once joined, you'll see the "Attack" button to access the target
+Button states:
+- **🔔 Purple**: Feed enabled and connected
+- **🔔 Red with X**: Feed disabled
+- **🔔 Yellow pulsing**: Connecting...
 
-### Creating a Coordinated Attack
-1. Navigate to attack a target via the attack interface (which uses loader.php)
-2. If the target is in your faction's war room list, a green plus button appears
-3. Click the button to open the attack creation dialog
-4. Configure the attack parameters:
-   - Number of participants needed
-   - Expiration time in minutes
-   - Whether to wait until full before showing the link
-5. Click "Create Attack" to broadcast to your faction
+## Technical Details
 
-### Marking Attacks as Complete
-1. Click the "Done" button on any attack you're participating in
-2. The attack will be removed from all participants' feeds
+### Compatibility
+- **Platforms**: Desktop browsers with Tampermonkey
+- **Pages**: 
+  - `torn.com/loader.php` (attack profiles)
+  - `torn.com/factions.php` (ranked war stats)
+- **API**: Uses WarRoom service API + Torn API
+- **Authentication**: JWT-based with automatic token refresh
 
-### Toggling the Attack Feed
-1. Click the bell icon to enable/disable notifications
-2. When enabled, the bell is purple
-3. When disabled, the bell is red with a line through it
+### Performance
+- Minimal impact on page load
+- Efficient SignalR long-polling connection
+- Smart caching for stats (1-hour TTL)
+- Automatic reconnection on connection loss
 
-### Viewing Ranked War Stats
-1. Navigate to Factions → Your Faction → War → Ranked War
-2. The limits bar appears below the faction info showing current requirements
-3. Each member row displays hits and average respect with compliance coloring
+### Privacy & Security
+- API key stored locally in browser storage
+- JWT tokens expire after defined period
+- No data sent to third parties
+- All communications over HTTPS
 
-## 🔧 Technical Details
+## Support & Contribution
 
-### Permissions & Grants
-- `GM_xmlhttpRequest` / `GM.xmlHttpRequest`: For API communication bypassing CSP
-- `GM_addStyle`: Inject custom CSS for the user interface
-- `GM_getValue` / `GM_setValue`: Store settings and authentication tokens
-- Connection to `api.torn.zzcraft.net`: WarRoom service API
+### Issues
+Found a bug? [Open an issue](https://github.com/TuRz4m/warroom-userscript/issues)
 
-### Matched Pages
-The script automatically runs on:
-- `https://www.torn.com/loader.php*` - Attack pages for target detection and coordinated attack creation
-- `https://www.torn.com/factions.php*` - Faction pages where the attack feed is displayed
+### Updates
+The script auto-updates through Tampermonkey. Manual updates available at:
+- **Update URL**: https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/warroom.user.js
 
-### Architecture
-- **SignalR Long Polling**: Custom implementation for real-time communication
-- **JWT Token Management**: Automatic token storage, validation, and renewal
-- **Event-Driven Updates**: Listens for attack events (Added, Updated, Done, Removed)
-- **Timer Management**: Individual countdown timers for each active attack
-- **Cache Layer**: 1-hour TTL cache for war room targets
-- **Reconnection Logic**: Exponential backoff retry (up to 5 attempts)
+### Development
+Built with:
+- Vanilla JavaScript (ES6+)
+- SignalR (long-polling for real-time)
+- Tampermonkey GM API
+- Modern CSS with animations
 
-### API Endpoints
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| POST | `/auth/login` | Login with API key |
-| GET | `/warrooms/targets` | Get all war room targets |
-| POST | `/WarRooms/{id}/attack` | Create coordinated attack |
-| POST | `/WarRooms/participate/{attackId}` | Join attack |
-| POST | `/WarRooms/end/{attackId}` | Mark attack as done |
-| GET | `/rankedwars/last` | Get ranked war stats |
+## Credits
 
-## 🛡️ Security
-
-- All user input is sanitized using HTML escaping to prevent XSS attacks
-- JWT tokens are stored securely using Tampermonkey's GM_getValue/GM_setValue
-- Token expiration is checked before each request with 5-minute buffer
-- Failed authentication attempts clear stored tokens
-- API communication uses HTTPS only
-
-## 🎨 User Interface
-
-The userscript features a modern, dark-themed interface with:
-- **Glassmorphic Design**: Semi-transparent cards with backdrop blur
-- **Purple Accent Color**: Consistent branding with #9b59b6 primary color
-- **Smooth Animations**: Slide-in/slide-out transitions for notifications
-- **Responsive Layout**: Adapts to different screen sizes
-- **Accessibility**: High contrast text and clear visual indicators
-
-## 🐛 Troubleshooting
-
-### No Attack Notifications Appearing
-1. Check that attack feed is enabled (bell icon should be purple)
-2. Verify your API key is configured in settings
-3. Ensure you're a member of a faction with active war rooms
-4. Check browser console for error messages
-
-### Authentication Errors
-1. Verify your API key is correct
-2. Clear the authentication token in settings
-3. Reload the page to re-authenticate
-
-### Attacks Not Updating
-1. Check your internet connection
-2. The script will attempt automatic reconnection
-3. If persistent, clear token and reload the page
-
-### Cache Issues
-1. Use the "Clear Cache" button in settings to reset target cache
-2. This forces a fresh fetch of war room targets
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 👤 Author
-
-**TuRzAm** (GitHub: [@TuRz4m](https://github.com/TuRz4m))
-- Website: [torn.zzcraft.net](https://torn.zzcraft.net/)
-
-## 🔗 Related Links
-
-- [Torn.com](https://www.torn.com) - The browser-based crime game
-- [Tampermonkey](https://www.tampermonkey.net/) - Userscript manager
-- [TornPDA Version](README-PDA.md) - Mobile version for TornPDA app
-- [WarRoom Service](https://torn.zzcraft.net/) - Get your API key
-
-## 📝 Version
-
-Current Version: **1.1.1**
+**Author**: TuRzAm  
+**Version**: 1.2.0  
+**License**: See LICENSE file  
+**Website**: https://torn.zzcraft.net/
 
 ---
 
-*This is a third-party userscript and is not officially affiliated with or endorsed by Torn.com*
+*This script enhances your Torn City experience. Always follow Torn's rules and terms of service.*
