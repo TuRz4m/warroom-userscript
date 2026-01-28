@@ -3,7 +3,7 @@
 // @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.2.0
+// @version      1.3.0
 // @match        https://www.torn.com/loader.php*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -196,11 +196,6 @@
         confirm: (message) => confirm(message),
         onInitialized: (connection) => {
           window.__warRoomConnection = connection
-          console.log(
-            '%c TuRzAm WarRoom Connector v1.2.0 %c Loaded successfully! ',
-            'background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px 0 0 4px;',
-            'background: #2ecc71; color: white; font-weight: bold; padding: 4px 8px; border-radius: 0 4px 4px 0;'
-          )
         },
         displayName: 'Torn',
         isPda: false,
@@ -311,6 +306,8 @@
   let currentUserId = null
   let connection = null
   let warRoomIds = []
+  let onlineUsersMap = new Map()  // Map<warRoomId, string[]>
+  let warRoomNames = new Map()    // Map<warRoomId, factionName>
 
   /**********************
    * CACHE MANAGEMENT
@@ -1545,6 +1542,129 @@
       }
     }
 
+    /* Online users badge */
+    .wr-online-badge {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      min-width: 16px;
+      height: 16px;
+      background: #2ecc71;
+      border-radius: 8px;
+      font-size: 0.6rem;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 3px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+      pointer-events: none;
+    }
+
+    .wr-online-badge.hidden {
+      display: none;
+    }
+
+    /* Online users panel */
+    .wr-users-panel {
+      position: fixed;
+      background: rgba(30, 30, 50, 0.98);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(155, 89, 182, 0.4);
+      border-radius: 0.75rem;
+      padding: 0.75rem;
+      min-width: 200px;
+      max-width: 280px;
+      max-height: 300px;
+      overflow-y: auto;
+      z-index: 100000;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+      animation: wr-fadein 0.2s ease;
+    }
+
+    .wr-users-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid rgba(155, 89, 182, 0.2);
+    }
+
+    .wr-users-panel-title {
+      color: #9b59b6;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+
+    .wr-users-panel-close {
+      background: none;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      font-size: 1.2rem;
+      padding: 0;
+      line-height: 1;
+      min-width: 24px;
+      min-height: 24px;
+    }
+
+    .wr-users-panel-close:hover {
+      color: #fff;
+    }
+
+    .wr-warroom-section {
+      margin-bottom: 0.75rem;
+    }
+
+    .wr-warroom-section:last-child {
+      margin-bottom: 0;
+    }
+
+    .wr-warroom-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.4rem;
+    }
+
+    .wr-warroom-name {
+      color: #ccc;
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+
+    .wr-warroom-count {
+      color: #2ecc71;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .wr-users-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem;
+    }
+
+    .wr-user-chip {
+      background: rgba(155, 89, 182, 0.15);
+      color: #b388d9;
+      font-size: 0.7rem;
+      padding: 0.15rem 0.4rem;
+      border-radius: 0.25rem;
+      max-width: 100px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .wr-no-users {
+      color: #666;
+      font-size: 0.75rem;
+      font-style: italic;
+    }
+
     .wr-attack-btn {
       position: absolute;
       anchor-name: --attack-button;
@@ -2015,6 +2135,139 @@
   }
 
   /**********************
+   * ONLINE USERS TRACKING
+   **********************/
+
+  function handleJoinWarRoom(data) {
+    if (data?.warRoomId != null) {
+      onlineUsersMap.set(data.warRoomId, data.onlineUsers || [])
+      updateOnlineUsersUI()
+    }
+  }
+
+  function handleLeaveWarRoom(data) {
+    if (data?.warRoomId != null) {
+      onlineUsersMap.set(data.warRoomId, data.onlineUsers || [])
+      updateOnlineUsersUI()
+    }
+  }
+
+  function handleListOnlineUsers(data) {
+    if (data?.warRoomId != null) {
+      onlineUsersMap.set(data.warRoomId, data.onlineUsers || [])
+      updateOnlineUsersUI()
+    }
+  }
+
+  function updateOnlineUsersUI() {
+    const totalOnline = Array.from(onlineUsersMap.values())
+      .reduce((sum, users) => sum + users.length, 0)
+
+    const badge = feedToggleBtn?.querySelector('.wr-online-badge')
+    if (badge) {
+      if (totalOnline > 0) {
+        badge.textContent = totalOnline > 99 ? '99+' : String(totalOnline)
+        badge.classList.remove('hidden')
+      } else {
+        badge.classList.add('hidden')
+      }
+    }
+  }
+
+  let usersPanel = null
+
+  function toggleUsersPanel() {
+    if (usersPanel) {
+      hideUsersPanel()
+    } else {
+      showUsersPanel()
+    }
+  }
+
+  function showUsersPanel() {
+    if (usersPanel) {
+      return  // Already open, keep it open
+    }
+
+    usersPanel = document.createElement('div')
+    usersPanel.className = 'wr-users-panel'
+
+    let content = `
+      <div class="wr-users-panel-header">
+        <span class="wr-users-panel-title">Online Users</span>
+        <button class="wr-users-panel-close">&times;</button>
+      </div>
+    `
+
+    const warRoomEntries = Array.from(onlineUsersMap.entries())
+
+    if (warRoomEntries.length === 0 || warRoomEntries.every(([, users]) => users.length === 0)) {
+      content += `<div class="wr-no-users">No users online</div>`
+    } else {
+      for (const [warRoomId, users] of warRoomEntries) {
+        if (users.length === 0) continue
+
+        const factionName = warRoomNames.get(warRoomId) || `War Room ${warRoomId}`
+        const userChips = users.map(u =>
+          `<span class="wr-user-chip" title="${escapeHtml(u)}">${escapeHtml(u)}</span>`
+        ).join('')
+
+        content += `
+          <div class="wr-warroom-section">
+            <div class="wr-warroom-header">
+              <span class="wr-warroom-name">${escapeHtml(factionName)}</span>
+              <span class="wr-warroom-count">${users.length}</span>
+            </div>
+            <div class="wr-users-list">${userChips}</div>
+          </div>
+        `
+      }
+    }
+
+    usersPanel.innerHTML = content
+
+    // Position near feedToggleBtn
+    const btnRect = feedToggleBtn.getBoundingClientRect()
+    const panelWidth = 240
+
+    // Position above the button, aligned to button center
+    usersPanel.style.bottom = `${window.innerHeight - btnRect.top + 10}px`
+    usersPanel.style.left = `${Math.max(10, btnRect.left + btnRect.width / 2 - panelWidth / 2)}px`
+
+    document.body.appendChild(usersPanel)
+
+    // Close button handler
+    usersPanel.querySelector('.wr-users-panel-close').addEventListener('click', hideUsersPanel)
+
+    // Desktop: close panel when mouse leaves (unless going back to button)
+    usersPanel.addEventListener('mouseleave', (e) => {
+      if (e.relatedTarget && feedToggleBtn.contains(e.relatedTarget)) {
+        return
+      }
+      hideUsersPanel()
+    })
+
+    // Click outside to close (for mobile and keyboard users)
+    setTimeout(() => {
+      document.addEventListener('click', handleOutsideClick)
+    }, 0)
+  }
+
+  function hideUsersPanel() {
+    if (usersPanel) {
+      usersPanel.remove()
+      usersPanel = null
+      document.removeEventListener('click', handleOutsideClick)
+    }
+  }
+
+  function handleOutsideClick(e) {
+    if (usersPanel && !usersPanel.contains(e.target) && !feedToggleBtn.contains(e.target)) {
+      hideUsersPanel()
+    }
+  }
+
+  /**********************
    * LOADER.PHP PAGE - TARGET DETECTION
    **********************/
   if (window.location.pathname.includes('/loader.php')) {
@@ -2216,6 +2469,46 @@
     if (warRooms && Array.isArray(warRooms)) {
       warRoomIds = warRooms.map((wr) => wr.warRoomId || wr.id)
 
+      // Fetch all targets once (for faction names and target cache)
+      try {
+        const targetsRes = await platform.fetch('GET', `${API_BASE}/WarRooms/targets`, {
+          'Authorization': `Bearer ${jwt}`
+        })
+        const warRoomTargetsData = JSON.parse(targetsRes.responseText)
+
+        // Build target cache and war room names from the same data
+        const allTargets = []
+        for (const warRoomData of warRoomTargetsData) {
+          // Set faction name for this war room
+          if (warRoomData.targetFaction?.factionName) {
+            warRoomNames.set(warRoomData.warRoomId, warRoomData.targetFaction.factionName)
+          } else {
+            warRoomNames.set(warRoomData.warRoomId, `War Room ${warRoomData.warRoomId}`)
+          }
+
+          // Collect targets for cache
+          if (warRoomData.targets && warRoomData.targets.length > 0) {
+            allTargets.push(
+              ...warRoomData.targets.map(t => ({
+                ...t,
+                warRoomId: warRoomData.warRoomId
+              }))
+            )
+          }
+        }
+
+        // Populate target cache for checkIfUserIsTarget
+        setCachedTargets(allTargets)
+      } catch {
+        // Set fallback names for war rooms we know about
+        for (const warRoomId of warRoomIds) {
+          if (!warRoomNames.has(warRoomId)) {
+            warRoomNames.set(warRoomId, `War Room ${warRoomId}`)
+          }
+        }
+      }
+
+      // Fetch attacks for each war room
       for (const warRoomId of warRoomIds) {
         try {
           await connection.invoke('GetAttacks', warRoomId)
@@ -2237,6 +2530,9 @@
         connection.on('AttackUpdate', handleAttackUpdate)
         connection.on('WarRoomAttacks', handleWarRoomAttacks)
         connection.on('ReceiveMessage', handleReceiveMessage)
+        connection.on('JoinWarRoom', handleJoinWarRoom)
+        connection.on('LeaveWarRoom', handleLeaveWarRoom)
+        connection.on('ListOnlineUsers', handleListOnlineUsers)
       }
 
       if (!connection.running) {
@@ -2257,6 +2553,9 @@
         connection.stop()
         connection = null
         warRoomIds = []
+        onlineUsersMap.clear()
+        warRoomNames.clear()
+        updateOnlineUsersUI()
         toast('Disconnected from WarRoom', 'info')
       }
     } catch {
@@ -2997,6 +3296,7 @@
       <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
       <line class="wr-bell-cross" x1="4" y1="4" x2="20" y2="20" stroke-width="2.5" style="display: none;"/>
     </svg>
+    <span class="wr-online-badge hidden">0</span>
   `
   document.body.appendChild(feedToggleBtn)
 
@@ -3010,35 +3310,82 @@
       feedToggleBtn.title = 'Connecting to WarRoom...'
       if (cross) cross.style.display = 'none'
     } else if (SETTINGS.attackFeedEnabled) {
-      feedToggleBtn.title = 'Attack Feed: ON (click to disable)'
+      feedToggleBtn.title = 'Attack Feed: ON (click to toggle, hover to see online users)'
       if (cross) cross.style.display = 'none'
     } else {
       feedToggleBtn.classList.add('disabled')
-      feedToggleBtn.title = 'Attack Feed: OFF (click to enable)'
+      feedToggleBtn.title = 'Attack Feed: OFF (click to enable, hover to see online users)'
       if (cross) cross.style.display = 'block'
     }
   }
 
   updateFeedToggleState()
 
-  feedToggleBtn.addEventListener('click', async () => {
+  // Feed toggle handler
+  async function handleFeedToggle() {
     SETTINGS.attackFeedEnabled = !SETTINGS.attackFeedEnabled
     saveSettings(SETTINGS)
-
     updateFeedToggleState()
 
     if (SETTINGS.attackFeedEnabled) {
-      if (updateFeedToggleState) {
-        updateFeedToggleState('connecting')
-      }
+      updateFeedToggleState('connecting')
       await connectToWarRoom()
-      if (updateFeedToggleState) {
-        updateFeedToggleState()
-      }
+      updateFeedToggleState()
     } else {
       disconnectFromWarRoom()
     }
+  }
+
+  // Desktop: hover to show panel, click to toggle
+  feedToggleBtn.addEventListener('mouseenter', () => {
+    showUsersPanel()
   })
+
+  feedToggleBtn.addEventListener('mouseleave', (e) => {
+    // Don't hide if mouse moved to the panel
+    if (usersPanel && e.relatedTarget && usersPanel.contains(e.relatedTarget)) {
+      return
+    }
+    hideUsersPanel()
+  })
+
+  feedToggleBtn.addEventListener('click', handleFeedToggle)
+
+  // Mobile: long-press to show panel, tap to toggle
+  let longPressTimer = null
+  let isLongPress = false
+  const LONG_PRESS_DURATION = 500
+
+  feedToggleBtn.addEventListener('touchstart', () => {
+    isLongPress = false
+    longPressTimer = setTimeout(() => {
+      isLongPress = true
+      toggleUsersPanel()
+    }, LONG_PRESS_DURATION)
+  }, { passive: true })
+
+  feedToggleBtn.addEventListener('touchend', (e) => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer)
+      longPressTimer = null
+    }
+
+    if (isLongPress) {
+      e.preventDefault()  // Prevent click after long-press
+    }
+    isLongPress = false
+  })
+
+  feedToggleBtn.addEventListener('touchcancel', () => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer)
+      longPressTimer = null
+    }
+    isLongPress = false
+  })
+
+  // Prevent context menu on long-press (mobile)
+  feedToggleBtn.addEventListener('contextmenu', (e) => e.preventDefault())
   
   /**********************
    * INITIALIZATION
@@ -3073,6 +3420,8 @@
    * CLEANUP ON PAGE UNLOAD
    **********************/
   window.addEventListener('beforeunload', () => {
+    hideUsersPanel()
+
     if (connection) {
       connection.stop()
     }
@@ -3089,4 +3438,9 @@
 }
 
   await initWarRoom(platform)
+  console.log(
+            '%c TuRzAm WarRoom Connector v1.3.0 %c Loaded successfully! ',
+            'background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px 0 0 4px;',
+            'background: #2ecc71; color: white; font-weight: bold; padding: 4px 8px; border-radius: 0 4px 4px 0;'
+          )
 })()

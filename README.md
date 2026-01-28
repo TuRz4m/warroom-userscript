@@ -177,7 +177,7 @@ Built with:
 ## Credits
 
 **Author**: TuRzAm  
-**Version**: 1.2.0  
+**Version**: 1.3.0  
 **License**: See LICENSE file  
 **Website**: https://torn.zzcraft.net/
 
