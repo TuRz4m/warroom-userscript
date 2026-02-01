@@ -3,7 +3,7 @@
 // @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.3.0
+// @version      1.3.1
 // @match        https://www.torn.com/loader.php*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -2160,8 +2160,7 @@
   }
 
   function updateOnlineUsersUI() {
-    const totalOnline = Array.from(onlineUsersMap.values())
-      .reduce((sum, users) => sum + users.length, 0)
+    const totalOnline = new Set(Array.from(onlineUsersMap.values()).flat()).size
 
     const badge = feedToggleBtn?.querySelector('.wr-online-badge')
     if (badge) {
