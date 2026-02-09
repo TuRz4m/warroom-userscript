@@ -3,7 +3,7 @@
 // @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.3.1
+// @version      1.3.2
 // @match        https://www.torn.com/loader.php*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -2656,9 +2656,9 @@
   }
 
   function checkRankedWarCompliance(member, limits) {
-    if (!limits) return { hits: 'neutral', total: 'neutral', avg: 'neutral' }
+    if (!limits) return { hits: 'neutral', total: 'neutral', avg: 'neutral', hitsNotAllowed: 'neutral' }
 
-    const result = { hits: 'neutral', total: 'neutral', avg: 'neutral' }
+    const result = { hits: 'neutral', total: 'neutral', avg: 'neutral', hitsNotAllowed: 'neutral' }
     const nbWarHits = member.nbWarHits ?? 0
     const totalRespect = member.totalRespect ?? 0
     const averageRespect = member.averageRespect ?? 0
@@ -2683,6 +2683,11 @@
       result.avg = 'non-compliant'
     } else if (limits.averageRespectGoal != null && nbWarHits > 0) {
       result.avg = 'compliant'
+    }
+
+    if (limits.noHitsAllowed) {
+      const nbHitsNotAllowed = member.nbHitsNotAllowed ?? 0
+      result.hitsNotAllowed = nbHitsNotAllowed > 0 ? 'non-compliant' : 'compliant'
     }
 
     return result
@@ -2754,7 +2759,10 @@
         const myHits = myMember.nbWarHits ?? 0
         const myAvgRespect = myMember.averageRespect ?? 0
         const myCompliance = checkRankedWarCompliance(myMember, limits)
-        myStatsHtml = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">My Hits:</span><span class="wr-rw-stat ${escapeHtml(myCompliance.hits)}" style="margin-left: 0.5rem;"><span class="wr-rw-stat-label">Hits: </span>${escapeHtml(String(myHits))}</span><span class="wr-rw-stat ${escapeHtml(myCompliance.avg)}"><span class="wr-rw-stat-label">Avg Respect: </span>${escapeHtml(myAvgRespect.toFixed(2))}</span></div>`
+        const myHitsNotAllowedHtml = limits?.noHitsAllowed
+          ? `<span class="wr-rw-stat ${escapeHtml(myCompliance.hitsNotAllowed)}"><span class="wr-rw-stat-label">Unauthorized Hits: </span>${escapeHtml(String(myMember.nbHitsNotAllowed ?? 0))}</span>`
+          : ''
+        myStatsHtml = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">My Hits:</span><span class="wr-rw-stat ${escapeHtml(myCompliance.hits)}" style="margin-left: 0.5rem;"><span class="wr-rw-stat-label">Hits: </span>${escapeHtml(String(myHits))}</span><span class="wr-rw-stat ${escapeHtml(myCompliance.avg)}"><span class="wr-rw-stat-label">Avg Respect: </span>${escapeHtml(myAvgRespect.toFixed(2))}</span>${myHitsNotAllowedHtml}</div>`
       }
     }
 
@@ -2783,6 +2791,10 @@
 
       if (limits.averageRespectGoal != null) {
         items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-label">Average Respect: </span><span class="wr-rw-limits-value">\u2265${escapeHtml(limits.averageRespectGoal.toFixed(2))}</span></span>`)
+      }
+
+      if (limits.noHitsAllowed) {
+        items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-value" style="color: #e74c3c;">No hits allowed</span></span>`)
       }
 
       container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${myStatsHtml}${updatedHtml}`
@@ -2880,11 +2892,16 @@
       }
     }
 
+    const hitsNotAllowedHtml = limits?.noHitsAllowed
+      ? `<span class="wr-rw-stat ${escapeHtml(compliance.hitsNotAllowed)}"><span class="wr-rw-stat-label">Unauthorized Hits:</span>${escapeHtml(String(member.nbHitsNotAllowed ?? 0))}</span>`
+      : ''
+
     const statsContainer = document.createElement('div')
     statsContainer.className = 'wr-rw-stats-container'
     statsContainer.innerHTML = `
       <span class="wr-rw-stat ${escapeHtml(compliance.hits)}"><span class="wr-rw-stat-label">Number of Hits:</span>${escapeHtml(String(nbWarHits))}</span>
       <span class="wr-rw-stat ${escapeHtml(compliance.avg)}"><span class="wr-rw-stat-label">Average Respect:</span>${escapeHtml(averageRespect.toFixed(2))}</span>
+      ${hitsNotAllowedHtml}
     `
 
     row.appendChild(statsContainer)
