@@ -4,7 +4,7 @@
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
 // @version      1.3.2
-// @match        https://www.torn.com/loader.php*
+// @match        https://www.torn.com/page.php?sid=attack*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
@@ -244,6 +244,7 @@
   }
 
   function log(category, message, data) {
+    return; // deactivate logging
     if (data !== undefined) {
       if (typeof data === 'object' && data !== null) {
         try {
@@ -1898,7 +1899,7 @@
 
     const isUserInAttackers = attack.attackers && attack.attackers.includes(currentUsername)
     const isUserCreator = attack.createdBy === currentUsername
-    const attackLink = attack.link || (attack.userId ? `https://www.torn.com/loader.php?sid=attack&user2ID=${attack.userId}` : null)
+    const attackLink = attack.link || (attack.userId ? `https://www.torn.com/page.php?sid=attack&user2ID=${attack.userId}` : null)
 
     const shouldShowAttackBtn = attackLink && currentUsername && isUserInAttackers
     const attackBtnHtml = shouldShowAttackBtn
