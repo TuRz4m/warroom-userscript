@@ -3,7 +3,7 @@
 // @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.3.2
+// @version      1.3.3
 // @match        https://www.torn.com/page.php?sid=attack*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -2270,7 +2270,7 @@
   /**********************
    * LOADER.PHP PAGE - TARGET DETECTION
    **********************/
-  if (window.location.pathname.includes('/loader.php')) {
+  if (window.location.pathname.includes('/page.php')) {
     const urlParams = new URLSearchParams(window.location.search)
     const user2ID = urlParams.get('user2ID')
 
