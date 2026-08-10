@@ -3,7 +3,7 @@
 // @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.3.3
+// @version      1.3.4
 // @match        https://www.torn.com/page.php?sid=attack*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -2585,12 +2585,6 @@
       rankedWarAutoRefreshTimeout = null
     }
 
-    document.querySelectorAll('.wr-rw-stats-container').forEach(el => el.remove())
-    document.querySelectorAll('.your-faction .points').forEach(el => {
-      el.style.color = ''
-      el.style.fontWeight = ''
-    })
-
     await enhanceRankedWarPage()
   }
 
@@ -2877,8 +2871,6 @@
   }
 
   function addStatsToMemberRow(row, member, limits) {
-    if (row.querySelector('.wr-rw-stats-container')) return
-
     const compliance = checkRankedWarCompliance(member, limits)
     const nbWarHits = member.nbWarHits ?? 0
     const averageRespect = member.averageRespect ?? 0
@@ -2887,9 +2879,13 @@
     if (pointsEl) {
       if (compliance.total === 'compliant') {
         pointsEl.style.color = '#2ecc71'
+        pointsEl.style.fontWeight = ''
       } else if (compliance.total === 'non-compliant') {
         pointsEl.style.color = '#e74c3c'
         pointsEl.style.fontWeight = '600'
+      } else {
+        pointsEl.style.color = ''
+        pointsEl.style.fontWeight = ''
       }
     }
 
@@ -2897,15 +2893,21 @@
       ? `<span class="wr-rw-stat ${escapeHtml(compliance.hitsNotAllowed)}"><span class="wr-rw-stat-label">Unauthorized Hits:</span>${escapeHtml(String(member.nbHitsNotAllowed ?? 0))}</span>`
       : ''
 
-    const statsContainer = document.createElement('div')
-    statsContainer.className = 'wr-rw-stats-container'
-    statsContainer.innerHTML = `
+    const statsHtml = `
       <span class="wr-rw-stat ${escapeHtml(compliance.hits)}"><span class="wr-rw-stat-label">Number of Hits:</span>${escapeHtml(String(nbWarHits))}</span>
       <span class="wr-rw-stat ${escapeHtml(compliance.avg)}"><span class="wr-rw-stat-label">Average Respect:</span>${escapeHtml(averageRespect.toFixed(2))}</span>
       ${hitsNotAllowedHtml}
     `
 
-    row.appendChild(statsContainer)
+    let statsContainer = row.querySelector('.wr-rw-stats-container')
+    if (statsContainer) {
+      statsContainer.innerHTML = statsHtml
+    } else {
+      statsContainer = document.createElement('div')
+      statsContainer.className = 'wr-rw-stats-container'
+      statsContainer.innerHTML = statsHtml
+      row.appendChild(statsContainer)
+    }
   }
 
   function extractUsernameFromRow(row) {
