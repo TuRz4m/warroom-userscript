@@ -3,7 +3,7 @@
 // @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.3.4
+// @version      1.3.5
 // @match        https://www.torn.com/page.php?sid=attack*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -24,6 +24,7 @@
    * PLATFORM DETECTION
    **********************/
   const IS_TORN_PDA = typeof window.flutter_inappwebview !== 'undefined'
+  const USER_AGENT = 'warroom-userscript/1.3.5'
 
   /**********************
    * PLATFORM DEFINITION
@@ -33,14 +34,14 @@
         // ——— TornPDA Platform ———
         fetch: async function pdaFetch(method, url, headers = {}, body = null) {
           try {
+            const reqHeaders = { ...headers, 'User-Agent': USER_AGENT }
             let res
             if (method === 'GET') {
-              res = await window.flutter_inappwebview.callHandler('PDA_httpGet', url, headers)
+              res = await window.flutter_inappwebview.callHandler('PDA_httpGet', url, reqHeaders)
             } else if (method === 'POST') {
-              res = await window.flutter_inappwebview.callHandler('PDA_httpPost', url, headers, body)
+              res = await window.flutter_inappwebview.callHandler('PDA_httpPost', url, reqHeaders, body)
             } else if (method === 'DELETE') {
-              // PDA doesn't support DELETE - skip silently for connection cleanup
-              return { status: 200, responseText: '' }
+              res = await window.flutter_inappwebview.callHandler('PDA_httpDelete', url, reqHeaders)
             } else {
               throw new Error(`Unsupported method: ${method}`)
             }
@@ -110,7 +111,7 @@
             const res = await GM.xmlHttpRequest({
               method,
               url,
-              headers,
+              headers: { ...headers, 'User-Agent': USER_AGENT },
               data: body,
               timeout: 30000,
             })
