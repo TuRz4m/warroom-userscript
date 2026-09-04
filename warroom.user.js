@@ -3,7 +3,7 @@
 // @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.3.5
+// @version      1.3.6
 // @match        https://www.torn.com/page.php?sid=attack*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -24,7 +24,64 @@
    * PLATFORM DETECTION
    **********************/
   const IS_TORN_PDA = typeof window.flutter_inappwebview !== 'undefined'
-  const USER_AGENT = 'warroom-userscript/1.3.5'
+  const USER_AGENT = 'warroom-userscript/1.3.6'
+
+  /**********************
+   * REQUEST TIMEOUTS
+   **********************/
+  // Ordinary API calls. Anything slower than this is a dead request.
+  const DEFAULT_TIMEOUT_MS = 30000
+  // The SignalR long poll must outlive the server's LongPolling.PollTimeout,
+  // otherwise every idle poll is aborted client-side and misread as a dropped
+  // connection. ASP.NET Core disables hub keep-alive pings for long polling
+  // (IConnectionInherentKeepAliveFeature), so nothing shortens an idle poll:
+  // it runs the full PollTimeout, 90s by default.
+  const POLL_TIMEOUT_MS = 110000
+
+  /**
+   * Bounds a request and lets its caller abandon it.
+   *
+   * `options.onRequest` is handed a cancel function synchronously, so a caller
+   * holding a long poll open can drop it on disconnect instead of waiting out
+   * the timeout. Settling is one-shot: whichever of completion, timeout or
+   * cancellation happens first wins.
+   */
+  function raceRequest(call, options = {}, cancel = null) {
+    const timeoutMs = options.timeout ?? DEFAULT_TIMEOUT_MS
+    let timer = null
+
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const settle = (fn, value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        fn(value)
+      }
+
+      timer = setTimeout(
+        () => settle(reject, new Error(`Request timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      )
+
+      if (typeof options.onRequest === 'function') {
+        options.onRequest(() => {
+          if (settled) return
+          try {
+            cancel?.()
+          } catch {
+            // Already settled underneath
+          }
+          settle(reject, new Error('Request aborted'))
+        })
+      }
+
+      Promise.resolve(call).then(
+        (value) => settle(resolve, value),
+        (err) => settle(reject, err)
+      )
+    })
+  }
 
   /**********************
    * PLATFORM DEFINITION
@@ -32,19 +89,24 @@
   const platform = IS_TORN_PDA
     ? {
         // ——— TornPDA Platform ———
-        fetch: async function pdaFetch(method, url, headers = {}, body = null) {
+        fetch: async function pdaFetch(method, url, headers = {}, body = null, options = {}) {
           try {
             const reqHeaders = { ...headers, 'User-Agent': USER_AGENT }
-            let res
+            let call
             if (method === 'GET') {
-              res = await window.flutter_inappwebview.callHandler('PDA_httpGet', url, reqHeaders)
+              call = window.flutter_inappwebview.callHandler('PDA_httpGet', url, reqHeaders)
             } else if (method === 'POST') {
-              res = await window.flutter_inappwebview.callHandler('PDA_httpPost', url, reqHeaders, body)
+              call = window.flutter_inappwebview.callHandler('PDA_httpPost', url, reqHeaders, body)
             } else if (method === 'DELETE') {
-              res = await window.flutter_inappwebview.callHandler('PDA_httpDelete', url, reqHeaders)
+              call = window.flutter_inappwebview.callHandler('PDA_httpDelete', url, reqHeaders)
             } else {
               throw new Error(`Unsupported method: ${method}`)
             }
+
+            // PDA's bridge exposes no cancellation, so the underlying call is left
+            // to finish; racing it is what stops a stalled request from pinning
+            // this await forever.
+            const res = await raceRequest(call, options)
 
             if (res.status >= 200 && res.status < 300) {
               return res
@@ -106,15 +168,17 @@
       }
     : {
         // ——— Desktop (Tampermonkey) Platform ———
-        fetch: async (method, url, headers = {}, body = null) => {
+        fetch: async (method, url, headers = {}, body = null, options = {}) => {
           try {
-            const res = await GM.xmlHttpRequest({
+            const request = GM.xmlHttpRequest({
               method,
               url,
               headers: { ...headers, 'User-Agent': USER_AGENT },
               data: body,
-              timeout: 30000,
+              timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
             })
+
+            const res = await raceRequest(request, options, () => request.abort?.())
 
             if (res.status >= 200 && res.status < 300) {
               return res
@@ -216,6 +280,7 @@
   const API_BASE = 'https://api.torn.zzcraft.net'
   const HUB_URL = 'https://api.torn.zzcraft.net/warroomhub'
   const TOKEN_STORAGE_KEY = 'wr_jwt_token'
+  const MAX_RECONNECT_ATTEMPTS = 5
   const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000 // 5 minutes
   const TARGET_CACHE_KEY = platform.targetCacheKey
   const TARGET_CACHE_TTL = 60 * 60 * 1000 // 1 hour
@@ -469,13 +534,36 @@
       this.accessToken = accessToken
       this.connectionId = null
       this.connectionToken = null
+      // `running` means the transport is live; `stopped` means we are done
+      // trying. reconnect() clears the first and not the second, so a failed
+      // attempt keeps the retry budget in play instead of silently ending.
       this.running = false
+      this.stopped = false
       this.handlers = new Map()
       this.invocationId = 0
       this.pendingCalls = new Map()
       this.reconnectAttempts = 0
-      this.maxReconnectAttempts = 5
+      this.maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS
       this.reconnectDelay = 1000
+      this.requestSeq = 0
+      this.abortActivePoll = null
+      // Called after a successful reconnect. Deliberately a hook rather than a
+      // direct call into setupConnection(): it must run *outside* the poll loop.
+      this.onReconnected = null
+    }
+
+    /**
+     * A distinct URL per request.
+     *
+     * Every hub message — poll, handshake, invoke, send — targets the same
+     * endpoint, and Tampermonkey serialises GM_xhr calls that share one URL.
+     * Without the discriminant, every send queues behind the in-flight long
+     * poll, which is open for up to POLL_TIMEOUT_MS. The stock SignalR client
+     * appends the same kind of parameter; ASP.NET Core ignores it.
+     */
+    transportUrl() {
+      const id = encodeURIComponent(this.connectionToken)
+      return `${this.hubUrl}?id=${id}&_=${Date.now()}.${++this.requestSeq}`
     }
 
     async start() {
@@ -498,7 +586,7 @@
         const handshakePayload = JSON.stringify({ protocol: 'json', version: 1 }) + '\x1e'
         await platform.fetch(
           'POST',
-          `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
+          this.transportUrl(),
           {
             'Content-Type': 'text/plain;charset=UTF-8',
             Authorization: `Bearer ${this.accessToken}`,
@@ -519,6 +607,7 @@
         }
 
         this.running = true
+        this.stopped = false
         this.reconnectAttempts = 0
 
         // Start poll loop in background
@@ -532,8 +621,10 @@
     }
 
     async reconnect() {
-      // Stop the current connection without resetting maxReconnectAttempts
+      // Take the transport down without clearing `stopped`: this is a retry,
+      // not the end of the session.
       this.running = false
+      this.cancelActivePoll()
 
       // Wait a bit for any pending requests to complete
       await new Promise(resolve => setTimeout(resolve, 500))
@@ -541,7 +632,7 @@
       // Clear old connection state but keep handlers
       this.connectionId = null
       this.connectionToken = null
-      this.pendingCalls.clear()
+      this.rejectPendingCalls('Connection reset')
 
       // NEGOTIATE
       const negotiateRes = await platform.fetch(
@@ -561,7 +652,7 @@
       const handshakePayload = JSON.stringify({ protocol: 'json', version: 1 }) + '\x1e'
       await platform.fetch(
         'POST',
-        `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
+        this.transportUrl(),
         {
           'Content-Type': 'text/plain;charset=UTF-8',
           Authorization: `Bearer ${this.accessToken}`,
@@ -586,18 +677,38 @@
     }
 
     async poll() {
-      const res = await platform.fetch(
-        'GET',
-        `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
-        {
-          Authorization: `Bearer ${this.accessToken}`,
-        }
-      )
-      return res.responseText
+      try {
+        const res = await platform.fetch(
+          'GET',
+          this.transportUrl(),
+          {
+            Authorization: `Bearer ${this.accessToken}`,
+          },
+          null,
+          {
+            timeout: POLL_TIMEOUT_MS,
+            onRequest: (abort) => {
+              this.abortActivePoll = abort
+            },
+          }
+        )
+        return res.responseText
+      } finally {
+        this.abortActivePoll = null
+      }
+    }
+
+    /** Drops the poll currently held open, if any. */
+    cancelActivePoll() {
+      const abort = this.abortActivePoll
+      this.abortActivePoll = null
+      if (abort) {
+        abort()
+      }
     }
 
     async pollLoop() {
-      while (this.running) {
+      while (!this.stopped) {
         try {
           const data = await this.poll()
           if (data) {
@@ -606,38 +717,71 @@
           // Reset reconnect attempts on successful poll
           this.reconnectAttempts = 0
         } catch (e) {
-          if (e.message.includes('HTTP 404') || e.message.includes('Network error')) {
-            if (this.reconnectAttempts < this.maxReconnectAttempts) {
-              this.reconnectAttempts++
-              const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000)
+          // A poll dropped by stop() or by a server close message is not a
+          // failure to recover from - the loop is simply over.
+          if (this.stopped) return
 
-              await new Promise(resolve => setTimeout(resolve, delay))
+          const reason = String(e?.message || e)
+          const isTransportError =
+            reason.includes('HTTP 404') || reason.includes('Network error')
 
-              if (this.running !== false) {
-                try {
-                  await this.reconnect()
-                  await setupConnection()
-                  toast('WarRoom Reconnected - Connection restored', 'success')
-                  continue
-                } catch (reconnectError) {
-                  log('SignalR', 'Reconnection failed', reconnectError.message)
-                }
-              }
-            } else {
-              log('SignalR', 'Max reconnect attempts reached')
-              this.stop()
-              toast('Connection lost. Please reload the page.', 'error')
-              return
-            }
+          if (!isTransportError) {
+            await new Promise((resolve) => setTimeout(resolve, 2000))
+            continue
           }
 
-          if (this.running) {
-            await new Promise(resolve => setTimeout(resolve, 2000))
-          } else {
-            return
-          }
+          const restored = await this.reconnectWithBackoff()
+          if (!restored) return
         }
       }
+    }
+
+    /**
+     * Rebuilds the connection, retrying on the shared budget.
+     *
+     * Owning the whole retry sequence is what keeps a failed attempt from
+     * ending the session: reconnect() leaves `running` false when it throws,
+     * so a loop keyed on that would exit after one bad try, without the toast
+     * and without spending the remaining attempts.
+     */
+    async reconnectWithBackoff() {
+      while (!this.stopped) {
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+          log('SignalR', 'Max reconnect attempts reached')
+          this.stop()
+          toast('Connection lost. Please reload the page.', 'error')
+          return false
+        }
+
+        this.reconnectAttempts++
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        if (this.stopped) return false
+
+        try {
+          await this.reconnect()
+
+          // Never awaited. Re-subscribing invokes hub methods whose completions
+          // can only arrive through the poll loop, so awaiting it here would
+          // block the very poll it is waiting on and time out.
+          this.runReconnectedHook()
+
+          toast('WarRoom Reconnected - Connection restored', 'success')
+          return true
+        } catch (e) {
+          log('SignalR', 'Reconnection failed', e?.message || String(e))
+        }
+      }
+
+      return false
+    }
+
+    runReconnectedHook() {
+      if (typeof this.onReconnected !== 'function') return
+
+      Promise.resolve()
+        .then(() => this.onReconnected())
+        .catch((e) => log('SignalR', 'Post-reconnect setup failed', e.message || String(e)))
     }
 
     handleMessages(data) {
@@ -748,7 +892,7 @@
 
         platform.fetch(
           'POST',
-          `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
+          this.transportUrl(),
           {
             'Content-Type': 'text/plain;charset=UTF-8',
             Authorization: `Bearer ${this.accessToken}`,
@@ -778,7 +922,7 @@
       try {
         await platform.fetch(
           'POST',
-          `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`,
+          this.transportUrl(),
           {
             'Content-Type': 'text/plain;charset=UTF-8',
             Authorization: `Bearer ${this.accessToken}`,
@@ -790,12 +934,25 @@
       }
     }
 
+    rejectPendingCalls(reason) {
+      const pending = [...this.pendingCalls.values()]
+      this.pendingCalls.clear()
+      // The stored reject clears the invoke timeout, so this also stops a
+      // dead call from sitting on a 30s timer nobody is waiting for.
+      pending.forEach((call) => call.reject(new Error(reason)))
+    }
+
     stop() {
+      this.stopped = true
       this.running = false
-      this.maxReconnectAttempts = 0
+
+      // Otherwise the poll stays open for the rest of POLL_TIMEOUT_MS, holding
+      // a request slot against every other call to the same host.
+      this.cancelActivePoll()
+      this.rejectPendingCalls('Connection closed')
 
       if (this.connectionToken) {
-        platform.fetch('DELETE', `${this.hubUrl}?id=${encodeURIComponent(this.connectionToken)}`, {
+        platform.fetch('DELETE', this.transportUrl(), {
           Authorization: `Bearer ${this.accessToken}`,
         }).catch(() => {
           // Ignore errors on close
@@ -2527,6 +2684,7 @@
 
       if (!connection) {
         connection = new SignalRLongPollingConnection(HUB_URL, jwt)
+        connection.onReconnected = setupConnection
 
         connection.on('AttackUpdate', handleAttackUpdate)
         connection.on('WarRoomAttacks', handleWarRoomAttacks)
