@@ -158,14 +158,59 @@ Button states:
 - No data sent to third parties
 - All communications over HTTPS
 
+---
+
+# RR - Torn Bank Helper
+
+A second, separate userscript in this repository: `banking.user.js`. It puts the faction vault
+withdrawal from Discord's `/bank withdraw` onto the Torn faction page, so a member can ask the
+bankers for money without leaving the game.
+
+**It does not move money.** It creates a request; a banker still pays it on Torn.
+
+## What it does
+
+- Adds a **💰 Withdraw** button next to the donate control on
+  `https://www.torn.com/factions.php?step=your&type=1#/tab=armoury`
+- Opens a modal for the amount and how long the bankers have (5 minutes to 1 day, 1 hour by default)
+- Posts the request to the faction's banking channel on Discord, exactly as `/bank withdraw` does
+
+Amounts are typed the way Torn players write money — `50m`, `1.5b`, `$50,000,000` — or `all` for the
+whole balance. The amount is sent as text and resolved by the server, so `all` always means what you
+have at that instant.
+
+## Installation
+
+1. Install [Tampermonkey](https://www.tampermonkey.net/) (see the prerequisites above).
+2. Install the script: [Install RR - Torn Bank Helper](https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/banking.user.js)
+3. Open the **Tampermonkey menu** on any Torn page and choose **Set Torn API key**.
+4. Paste your public Torn API key and click **Save**. The key is checked immediately.
+
+There is nothing else to configure. To change or remove the key later, use the same menu command.
+
+### Torn PDA
+
+No setup at all — PDA supplies the API key at install time, and no menu command is registered.
+
+## Notes
+
+- Your Torn account must belong to a faction registered with the service, and that faction must have
+  a banking channel configured, or the request has nowhere to go.
+- You may have **one open request at a time**. Asking for a second is refused, naming the amount
+  already outstanding. Cancel it with `/bank cancel` in Discord or on the Banking page.
+- Refusals are shown exactly as the server words them — no message is invented on this side.
+- Runs alongside **RR - Torn War Helper** on the same pages: separate storage, separate styles,
+  separate sign-in.
+
 ## Support & Contribution
 
 ### Issues
 Found a bug? [Open an issue](https://github.com/TuRz4m/warroom-userscript/issues)
 
 ### Updates
-The script auto-updates through Tampermonkey. Manual updates available at:
-- **Update URL**: https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/warroom.user.js
+Both scripts auto-update through Tampermonkey. Manual updates available at:
+- **War Helper**: https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/warroom.user.js
+- **Bank Helper**: https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/banking.user.js
 
 ### Development
 Built with:
