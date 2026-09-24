@@ -3,7 +3,7 @@
 // @description  Ask the faction bankers for a vault withdrawal from inside Torn.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.0.0
+// @version      1.1.0
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
@@ -23,7 +23,7 @@
    * PLATFORM DETECTION
    **********************/
   const IS_TORN_PDA = typeof window.flutter_inappwebview !== 'undefined'
-  const USER_AGENT = 'rr-bank-userscript/1.0.0'
+  const USER_AGENT = 'rr-bank-userscript/1.1.0'
   const API_KEY_STORAGE_KEY = 'bk_api_key'
 
   /**
@@ -306,6 +306,33 @@
       const amount = Number(value)
       if (!Number.isFinite(amount)) return ''
       return '$' + amount.toLocaleString('en-US', { maximumFractionDigits: 0 })
+    }
+
+    /**
+     * The API serialises UTC without a zone suffix, so one is added when missing: parsed bare, the
+     * string would be read as local time and every figure would be off by the member's UTC offset.
+     */
+    function parseUtc(isoTimestamp) {
+      const text = /[zZ]|[+-]\d\d:?\d\d$/.test(isoTimestamp) ? isoTimestamp : isoTimestamp + 'Z'
+      return new Date(text).getTime()
+    }
+
+    /** "5 minutes", "2 hours", "1 day" - the distance between now and a timestamp, without a sign. */
+    function formatDistance(isoTimestamp) {
+      const ms = Math.abs(Date.now() - parseUtc(isoTimestamp))
+      if (!Number.isFinite(ms)) return ''
+
+      const minutes = Math.round(ms / 60000)
+      if (minutes < 1) return 'less than a minute'
+      if (minutes < 60) return minutes === 1 ? '1 minute' : `${minutes} minutes`
+      const hours = Math.round(minutes / 60)
+      if (hours < 24) return hours === 1 ? '1 hour' : `${hours} hours`
+      const days = Math.round(hours / 24)
+      return days === 1 ? '1 day' : `${days} days`
+    }
+
+    function isPast(isoTimestamp) {
+      return parseUtc(isoTimestamp) <= Date.now()
     }
 
     /**********************
@@ -617,6 +644,58 @@
         display: block;
       }
 
+      /* -- The open request ------------------------------------------------------------ */
+
+      .bk-request {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        padding: 1rem;
+        border: 1px solid var(--bk-line);
+        border-radius: 8px;
+        background: var(--bk-field-bg);
+      }
+
+      .bk-request-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .bk-request-amount {
+        color: var(--bk-accent-2);
+        font-size: 1.5rem;
+        font-weight: 700;
+        line-height: 1.2;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .bk-request-meta {
+        color: var(--bk-text-soft);
+        font-size: 0.85rem;
+      }
+
+      .bk-status {
+        display: inline-block;
+        padding: 0.15rem 0.6rem;
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .bk-status--pending { color: var(--bk-accent); }
+      .bk-status--inprogress { color: var(--bk-accent-2); }
+      .bk-status--needsreview { color: #ffb020; }
+
+      .bk-loading {
+        color: var(--bk-text-dim);
+        font-size: 0.9rem;
+      }
+
       /* -- Footer ------------------------------------------------------------------------ */
 
       .bk-modal-footer {
@@ -628,7 +707,8 @@
       }
 
       .bk-btn-primary,
-      .bk-btn-secondary {
+      .bk-btn-secondary,
+      .bk-btn-danger {
         padding: 0.5rem 1rem;
         border-radius: var(--bk-radius-sm);
         font-family: var(--bk-font);
@@ -662,8 +742,27 @@
         color: #fff;
       }
 
+      /* The app's destructive action: bordered in the danger hue rather than filled, so it never
+         outshouts the thing somebody came here to read. */
+      .bk-btn-danger {
+        border: 1px solid rgba(255, 0, 110, 0.5);
+        background: rgba(255, 0, 110, 0.12);
+        color: var(--bk-danger);
+      }
+
+      .bk-btn-danger:hover:not(:disabled) {
+        background: rgba(255, 0, 110, 0.22);
+      }
+
+      /* Armed: the second press is the one that cancels, and it has to look like it. */
+      .bk-btn-danger.bk-armed {
+        background: var(--bk-danger);
+        color: #fff;
+      }
+
       .bk-btn-primary:disabled,
-      .bk-btn-secondary:disabled {
+      .bk-btn-secondary:disabled,
+      .bk-btn-danger:disabled {
         opacity: 0.5;
         cursor: not-allowed;
         transform: none;
@@ -752,12 +851,14 @@
         .bk-modal-close,
         .bk-btn-primary,
         .bk-btn-secondary,
+        .bk-btn-danger,
         .bk-input {
           min-height: 44px;
         }
 
         .bk-modal-footer .bk-btn-primary,
-        .bk-modal-footer .bk-btn-secondary {
+        .bk-modal-footer .bk-btn-secondary,
+        .bk-modal-footer .bk-btn-danger {
           flex: 1;
         }
       }
@@ -898,6 +999,59 @@
      **********************/
 
     /**
+     * Calls a path under the caller's own faction bank, signed in.
+     *
+     * The faction id comes from the token rather than the page, because it is what the server checks
+     * the route against. Returns the raw response; the callers decide what an empty body means.
+     */
+    async function bankFetch(method, path, body = null) {
+      let token = await ensureAuthenticated()
+
+      if (!currentFactionId) {
+        throw new Error('This API key is not linked to a faction registered with the service.')
+      }
+
+      const send = (bearer) => {
+        const headers = { 'Authorization': `Bearer ${bearer}` }
+        if (body !== null) headers['Content-Type'] = 'application/json'
+        return platform.fetch(
+          method,
+          `${API_BASE}/Factions/${currentFactionId}/bank${path}`,
+          headers,
+          body === null ? null : JSON.stringify(body)
+        )
+      }
+
+      try {
+        return await send(token)
+      } catch (err) {
+        // A token lasts a week, so one can expire between opening the page and pressing the button.
+        // Retried once rather than reported, because the member did nothing wrong.
+        if (!err?.message?.startsWith('HTTP 401')) throw err
+        clearStoredToken()
+        token = await ensureAuthenticated()
+        return send(token)
+      }
+    }
+
+    /**
+     * The member's open request, or null when they have none.
+     *
+     * The API answers "none" with a 204 and no body, which is inside the 2xx range both platforms
+     * accept, so an empty body is the signal rather than an error.
+     */
+    async function getOpenRequest() {
+      const res = await bankFetch('GET', '/withdraw')
+      return res.responseText ? JSON.parse(res.responseText) : null
+    }
+
+    /** Withdraws the member's open request. No id: only one can be open. */
+    async function cancelOpenRequest() {
+      const res = await bankFetch('POST', '/withdraw/cancel')
+      return JSON.parse(res.responseText)
+    }
+
+    /**
      * Asks the bankers for money.
      *
      * The amount is the raw string the member typed. The API owns what counts as an amount, and a
@@ -905,31 +1059,7 @@
      * in particular can only be resolved against the balance the server reads at that instant.
      */
     async function requestWithdraw(amount, expiresInMinutes) {
-      let token = await ensureAuthenticated()
-
-      if (!currentFactionId) {
-        throw new Error('This API key is not linked to a faction registered with the service.')
-      }
-
-      const send = (bearer) => platform.fetch(
-        'POST',
-        `${API_BASE}/Factions/${currentFactionId}/bank/withdraw`,
-        { 'Content-Type': 'application/json', 'Authorization': `Bearer ${bearer}` },
-        JSON.stringify({ amount, expiresInMinutes })
-      )
-
-      let res
-      try {
-        res = await send(token)
-      } catch (err) {
-        // A token lasts a week, so one can expire between opening the page and pressing the button.
-        // Retried once rather than reported, because the member did nothing wrong.
-        if (!err?.message?.startsWith('HTTP 401')) throw err
-        clearStoredToken()
-        token = await ensureAuthenticated()
-        res = await send(token)
-      }
-
+      const res = await bankFetch('POST', '/withdraw', { amount, expiresInMinutes })
       return JSON.parse(res.responseText)
     }
 
@@ -975,6 +1105,16 @@
     /**********************
      * WITHDRAWAL MODAL
      **********************/
+
+    // How long the armed "Yes, cancel it" state lasts before the button goes back to asking.
+    const CANCEL_CONFIRM_MS = 4000
+
+    /**
+     * Opens the withdrawal modal on whichever view is true right now.
+     *
+     * The member's open request is asked for first, because only one can be open: offering the form
+     * to somebody who already has one would only ever end in a refusal naming it.
+     */
     function showWithdrawModal() {
       if (!platform.getApiKey()) {
         if (platform.isPda) {
@@ -985,17 +1125,212 @@
         return
       }
 
-      const options = DURATIONS
-        .map(({ label, minutes }) =>
-          `<option value="${minutes}"${minutes === DEFAULT_DURATION_MINUTES ? ' selected' : ''}>${escapeHtml(label)}</option>`)
-        .join('')
-
       const modal = openModal(`
         <div class="bk-modal-header">
           <h2 class="bk-modal-title">Vault withdrawal</h2>
           <button class="bk-modal-close" type="button" aria-label="Close">&times;</button>
         </div>
+        <div class="bk-view"></div>
+      `)
 
+      loadWithdrawView(modal)
+    }
+
+    /** Whether this modal is still the one on screen, so a late answer does not draw into a closed one. */
+    function isShowing(modal) {
+      return openOverlay !== null && openOverlay.contains(modal)
+    }
+
+    /** Replaces the body and footer, keeping the header - one modal, several states. */
+    function setView(modal, html) {
+      const view = modal.querySelector('.bk-view')
+      view.innerHTML = html
+      view.querySelector('#bk-close')?.addEventListener('click', closeModal)
+      return view
+    }
+
+    function showError(errorBox, message) {
+      errorBox.textContent = message
+      errorBox.classList.add('bk-visible')
+    }
+
+    function hideError(errorBox) {
+      errorBox.classList.remove('bk-visible')
+    }
+
+    async function loadWithdrawView(modal) {
+      // Shown at once, so a slow network does not make the button look dead.
+      setView(modal, `
+        <div class="bk-modal-body">
+          <div class="bk-loading">Checking your requests…</div>
+        </div>
+      `)
+
+      let open
+      try {
+        open = await getOpenRequest()
+      } catch (err) {
+        if (isShowing(modal)) renderLoadError(modal, extractErrorMessage(err))
+        return
+      }
+
+      if (!isShowing(modal)) return
+      if (open) renderOpenRequest(modal, open)
+      else renderRequestForm(modal)
+    }
+
+    /**
+     * The read failed. Deliberately not the form: without knowing whether a request is open, asking
+     * for another may only be refused.
+     */
+    function renderLoadError(modal, message) {
+      const view = setView(modal, `
+        <div class="bk-modal-body">
+          <div class="bk-error bk-visible" id="bk-error"></div>
+        </div>
+        <div class="bk-modal-footer">
+          <button class="bk-btn-secondary" id="bk-close" type="button">Close</button>
+          <button class="bk-btn-primary" id="bk-retry" type="button">Try again</button>
+        </div>
+      `)
+
+      view.querySelector('#bk-error').textContent = message
+      view.querySelector('#bk-retry').addEventListener('click', () => loadWithdrawView(modal))
+    }
+
+    /** What a status means to the member who asked, rather than to the bankers. */
+    function describeRequestStatus(request) {
+      switch (request.status) {
+        case 'InProgress':
+          return {
+            label: 'Being paid',
+            css: 'inprogress',
+            detail: request.claimedByUserName
+              ? `${request.claimedByUserName} is sending it on Torn.`
+              : 'A banker is sending it on Torn.',
+          }
+        case 'NeedsReview':
+          return {
+            label: 'Needs review',
+            css: 'needsreview',
+            detail: request.matchedAmount != null
+              ? `${formatMoney(request.matchedAmount)} arrived instead. A faction admin will sort it out.`
+              : 'A payment arrived for a different amount. A faction admin will sort it out.',
+          }
+        default:
+          return { label: 'Waiting for a banker', css: 'pending', detail: '' }
+      }
+    }
+
+    /** "Asked 5 minutes ago · expires in 55 minutes", in the member's terms. */
+    function describeTiming(request) {
+      const parts = []
+      if (request.createdAt) parts.push(`Asked ${formatDistance(request.createdAt)} ago`)
+
+      // Expiry only ever closes a request nobody has picked up; once a banker has claimed it the
+      // deadline no longer applies, and stating it would suggest the money might still be withdrawn.
+      if (request.status === 'Pending' && request.expiresAt) {
+        parts.push(isPast(request.expiresAt)
+          ? 'expired, closing shortly'
+          : `expires in ${formatDistance(request.expiresAt)}`)
+      }
+
+      return parts.join(' · ')
+    }
+
+    function renderOpenRequest(modal, request) {
+      const status = describeRequestStatus(request)
+
+      // A cancel while a banker is mid-transfer is allowed, but it is the one case where the money
+      // may arrive anyway, so the member is told before rather than after.
+      const warning = request.status === 'InProgress'
+        ? `<div class="bk-desc">A banker has already picked this up. If you cancel now, tell them - the
+             money may already be on its way.</div>`
+        : ''
+
+      const view = setView(modal, `
+        <div class="bk-modal-body">
+          <div class="bk-request">
+            <div class="bk-request-head">
+              <span class="bk-request-amount">${escapeHtml(formatMoney(request.amount))}</span>
+              <span class="bk-status bk-status--${status.css}">${escapeHtml(status.label)}</span>
+            </div>
+            <div class="bk-request-meta">${escapeHtml(describeTiming(request))}</div>
+            ${status.detail ? `<div class="bk-request-meta">${escapeHtml(status.detail)}</div>` : ''}
+          </div>
+
+          <div class="bk-note">
+            You can only have one request open. Cancel this one to ask for a different amount.
+          </div>
+
+          ${warning}
+
+          <div class="bk-error" id="bk-error"></div>
+        </div>
+
+        <div class="bk-modal-footer">
+          <button class="bk-btn-secondary" id="bk-close" type="button">Close</button>
+          <button class="bk-btn-danger" id="bk-cancel-request" type="button">Cancel request</button>
+        </div>
+      `)
+
+      const errorBox = view.querySelector('#bk-error')
+      const cancelBtn = view.querySelector('#bk-cancel-request')
+
+      // Two presses, because this modal is otherwise one click from a withdrawn request, and Torn's
+      // page is dense enough that a stray tap on a phone is easy.
+      let armedTimer = null
+
+      const disarm = () => {
+        clearTimeout(armedTimer)
+        armedTimer = null
+        cancelBtn.classList.remove('bk-armed')
+        cancelBtn.textContent = 'Cancel request'
+      }
+
+      // The button is disabled while the cancel is in flight, which is also what stops a second one.
+      cancelBtn.addEventListener('click', async () => {
+        if (!armedTimer) {
+          cancelBtn.classList.add('bk-armed')
+          cancelBtn.textContent = 'Yes, cancel it'
+          armedTimer = setTimeout(disarm, CANCEL_CONFIRM_MS)
+          return
+        }
+
+        disarm()
+        cancelBtn.disabled = true
+        cancelBtn.textContent = 'Cancelling…'
+        hideError(errorBox)
+
+        try {
+          const cancelled = await cancelOpenRequest()
+          toast('Cancelled your request for', 'success', cancelled.amount)
+          if (isShowing(modal)) renderRequestForm(modal)
+        } catch (err) {
+          const message = extractErrorMessage(err)
+
+          // 400 is "already closed", 404 is "nothing open": either way what is on screen is stale -
+          // a banker paid it or it expired while the modal was open. Say so and show what is true.
+          if (/^HTTP (400|404)/.test(err?.message || '')) {
+            toast(message, 'error')
+            if (isShowing(modal)) loadWithdrawView(modal)
+            return
+          }
+
+          showError(errorBox, message)
+          disarm()
+          cancelBtn.disabled = false
+        }
+      })
+    }
+
+    function renderRequestForm(modal) {
+      const options = DURATIONS
+        .map(({ label, minutes }) =>
+          `<option value="${minutes}"${minutes === DEFAULT_DURATION_MINUTES ? ' selected' : ''}>${escapeHtml(label)}</option>`)
+        .join('')
+
+      const view = setView(modal, `
         <div class="bk-modal-body">
           <div class="bk-field">
             <label class="bk-label" for="bk-amount">Amount</label>
@@ -1018,27 +1353,20 @@
         </div>
 
         <div class="bk-modal-footer">
-          <button class="bk-btn-secondary" id="bk-cancel" type="button">Close</button>
+          <button class="bk-btn-secondary" id="bk-close" type="button">Close</button>
           <button class="bk-btn-primary" id="bk-submit" type="button" disabled>Ask the bankers</button>
         </div>
       `)
 
-      const amountInput = modal.querySelector('#bk-amount')
-      const durationSelect = modal.querySelector('#bk-duration')
-      const errorBox = modal.querySelector('#bk-error')
-      const submitBtn = modal.querySelector('#bk-submit')
-
-      modal.querySelector('#bk-cancel').addEventListener('click', closeModal)
+      const amountInput = view.querySelector('#bk-amount')
+      const durationSelect = view.querySelector('#bk-duration')
+      const errorBox = view.querySelector('#bk-error')
+      const submitBtn = view.querySelector('#bk-submit')
 
       const syncSubmitState = () => {
         submitBtn.disabled = amountInput.value.trim().length === 0
       }
       amountInput.addEventListener('input', syncSubmitState)
-
-      const showError = (message) => {
-        errorBox.textContent = message
-        errorBox.classList.add('bk-visible')
-      }
 
       let submitting = false
 
@@ -1049,15 +1377,25 @@
         submitting = true
         submitBtn.disabled = true
         submitBtn.textContent = 'Asking…'
-        errorBox.classList.remove('bk-visible')
+        hideError(errorBox)
 
         try {
           const created = await requestWithdraw(amount, Number(durationSelect.value))
           closeModal()
           toast('Asked the bankers for', 'success', created.amount)
         } catch (err) {
+          const message = extractErrorMessage(err)
+
+          // A request opened elsewhere - Discord, the site, another tab - since this form was drawn.
+          // The refusal names it, but showing it with its Cancel button is the more useful answer.
+          if (/already have a request open/i.test(message) && isShowing(modal)) {
+            toast(message, 'error')
+            loadWithdrawView(modal)
+            return
+          }
+
           // The server's refusals are already written for the member; they are shown as they arrive.
-          showError(extractErrorMessage(err))
+          showError(errorBox, message)
         } finally {
           // In a finally, not in the catch, because anything the catch itself throws would
           // otherwise leave the button disabled and reading "Asking..." with no way to try again.
