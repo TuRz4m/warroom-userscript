@@ -3,7 +3,7 @@
 // @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.3.6
+// @version      1.4.0
 // @match        https://www.torn.com/page.php?sid=attack*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -12,6 +12,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @connect      api.torn.zzcraft.net
+// @connect      api.torn.com
 // @updateURL    https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/warroom.user.js
 // @downloadURL  https://github.com/TuRz4m/warroom-userscript/raw/refs/heads/main/warroom.user.js
 // @require      https://raw.githubusercontent.com/Tampermonkey/utils/refs/heads/main/requires/gh_2215_make_GM_xhr_more_parallel_again.js
@@ -24,7 +25,7 @@
    * PLATFORM DETECTION
    **********************/
   const IS_TORN_PDA = typeof window.flutter_inappwebview !== 'undefined'
-  const USER_AGENT = 'warroom-userscript/1.3.6'
+  const USER_AGENT = 'warroom-userscript/1.4.0'
 
   /**********************
    * REQUEST TIMEOUTS
@@ -339,7 +340,8 @@
     autoHideFullAttacks: true,
     urgentThresholdMinutes: 1,
     maxToasts: 10,
-    showMemberStatsOnRankedWar: true
+    showMemberStatsOnRankedWar: true,
+    showEnemyHospitalTimer: true
   }
 
   function getSettings() {
@@ -1621,6 +1623,40 @@
       font-size: 0.8rem;
     }
 
+    /* Enemy status detail - a countdown, a travel direction, or a country.
+       The cell's own text is left in place and only made transparent; ours is
+       painted over it by a pseudo-element fed from an inline custom property.
+       Nothing React owns is ever written to, so a re-render costs at most one
+       tick. */
+    .enemy-faction .members-list div.status.wr-status-override {
+      position: relative !important;
+      color: transparent !important;
+    }
+
+    .enemy-faction .members-list div.status.wr-status-override::after {
+      content: var(--wr-status-override, '');
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 10px;
+      width: calc(100% - 10px);
+      height: 100%;
+      background: inherit;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      color: var(--user-status-red-color, #e74c3c);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Keep Torn's own colour for the state. The cell already carries abroad /
+       traveling, so the replacement reads the same way the original did rather
+       than turning every travelling enemy red. */
+    .enemy-faction .members-list div.status.wr-status-override.abroad::after,
+    .enemy-faction .members-list div.status.wr-status-override.traveling::after {
+      color: var(--user-status-blue-color, #5c9fd6);
+    }
+
     /* Anchors for button positioning */
     .header-menu {
       anchor-name: --header-menu;
@@ -2875,6 +2911,21 @@
     }
   }
 
+  /** The limits panel's refresh icon, in its two states. */
+  function autoRefreshIconSvg(enabled) {
+    const body = enabled
+      ? `<circle cx="12" cy="12" r="2" fill="currentColor"/>`
+      : `<line x1="2" y1="2" x2="22" y2="22"/>`
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 2v6h-6"/>
+          <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+          <path d="M3 22v-6h6"/>
+          <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+          ${body}
+        </svg>`
+  }
+
   function updateLimitsDisplay(container, limits, lastUpdated, onRefresh, members) {
     if (!container) return
 
@@ -2888,21 +2939,7 @@
 
     const relativeTime = formatRelativeTime(lastUpdated)
     const autoRefreshClass = rankedWarAutoRefreshEnabled ? 'enabled' : 'disabled'
-    const autoRefreshIcon = rankedWarAutoRefreshEnabled
-      ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 2v6h-6"/>
-          <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
-          <path d="M3 22v-6h6"/>
-          <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
-          <circle cx="12" cy="12" r="2" fill="currentColor"/>
-        </svg>`
-      : `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 2v6h-6"/>
-          <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
-          <path d="M3 22v-6h6"/>
-          <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
-          <line x1="2" y1="2" x2="22" y2="22"/>
-        </svg>`
+    const autoRefreshIcon = autoRefreshIconSvg(rankedWarAutoRefreshEnabled)
     const refreshBtnHtml = onRefresh ? `<button class="wr-rw-refresh-btn ${autoRefreshClass}">${autoRefreshIcon}</button>` : ''
     const updatedHtml = relativeTime ? `<div class="wr-rw-limits-footer"><span class="wr-rw-limits-updated">Last data update: ${escapeHtml(relativeTime)}</span>${refreshBtnHtml}</div>` : ''
 
@@ -3154,6 +3191,464 @@
     log('RankedWar', 'Enhancement complete')
   }
 
+  /**********************
+   * ENEMY HOSPITAL / JAIL TIMERS
+   **********************/
+
+  // Torn's own status column says no more than "Hospital" or "Traveling", so
+  // deciding who to hit next means opening profiles one at a time.
+  // /v2/faction/{id}/members carries enough to say more:
+  //
+  //   Hospital / Jail  status.until, a Unix timestamp in SECONDS -> a countdown
+  //   Traveling        status.description, "Traveling from A to B" -> direction
+  //   Abroad           status.description, "In X" -> the country
+  //
+  // There is deliberately NO travel countdown: `until` is null for every
+  // Traveling and Abroad member this endpoint returns (verified against a
+  // 98-member response - 11 travelling, all null), and the record carries no
+  // other time field. Torn does not publish other players' landing times here.
+  //
+  // Deliberately independent of enhanceRankedWarPage: that needs a zzcraft JWT,
+  // this needs only a Torn key, and somebody with no backend access should
+  // still get the detail.
+  const TORN_API_BASE = 'https://api.torn.com/v2'
+  const ENEMY_STATUS_REFRESH_MS = 15000
+  const ENEMY_STATUS_BACKOFF_MS = 60000
+  const ENEMY_STATUS_TICK_MS = 1000
+  // The war page is a React app and the script runs at document-idle, so on a
+  // fresh load the enemy panel does not exist yet and the first fetch has no
+  // faction to ask about. Waiting a whole refresh interval for it is why the
+  // column used to stay bare for the first fifteen seconds.
+  const ENEMY_STATUS_RETRY_MS = 1000
+  const ENEMY_OVERRIDDEN_STATES = new Set(['Hospital', 'Jail', 'Traveling', 'Abroad'])
+
+  // Torn error codes that no amount of retrying will fix (bad key, no access,
+  // key disabled). Anything here stops the loop outright; 5/8/9 are rate limit,
+  // IP block and API-disabled, which are worth waiting out.
+  const TORN_FATAL_ERROR_CODES = new Set([0, 1, 2, 3, 4, 6, 7, 10, 12, 13, 14, 16, 18, 21])
+  const TORN_BACKOFF_ERROR_CODES = new Set([5, 8, 9])
+
+  let enemyStatusById = new Map() // String(tornUserId) -> { state, until, description }
+  let enemyStatusFetchInFlight = false
+  let enemyStatusStopped = false // latched by a non-recoverable Torn error
+  let enemyStatusRefreshTimeout = null
+  let enemyStatusTickTimer = null
+
+  function getOpponentFactionId() {
+    const link = document.querySelector('.enemy-faction a[href*="step=profile&ID="]')
+    if (!link) return null
+
+    try {
+      return new URL(link.href, window.location.origin).searchParams.get('ID')
+    } catch {
+      return null
+    }
+  }
+
+  function enemyRowUserId(row) {
+    // The numeric id joins straight to member.id. extractUsernameFromRow is
+    // name-based, and a name match would break on any casing difference.
+    const link = row.querySelector('a[href*="XID="]') || row.querySelector('a[href*="user2ID="]')
+    if (!link) return null
+
+    try {
+      const params = new URL(link.href, window.location.origin).searchParams
+      return params.get('XID') || params.get('user2ID')
+    } catch {
+      return null
+    }
+  }
+
+  function formatCountdown(totalSeconds) {
+    const hours = Math.floor(totalSeconds / 3600)
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+    const seconds = Math.floor(totalSeconds % 60)
+    const pad = (n) => String(n).padStart(2, '0')
+
+    // Hospital times routinely run past an hour, so unlike the attack toast
+    // countdown this one cannot stop at minutes.
+    return hours > 0
+      ? `${hours}:${pad(minutes)}:${pad(seconds)}`
+      : `${minutes}:${pad(seconds)}`
+  }
+
+  // The status column is narrow, and these are the only long destination names
+  // Torn has. Abbreviating is what keeps "Traveling from United Kingdom" fitting
+  // where the word "Traveling" used to.
+  const LOCATION_ABBREVIATIONS = {
+    'South Africa': 'SA',
+    'Cayman Islands': 'Cayman',
+    'United Kingdom': 'UK',
+    'Argentina': 'Arg',
+    'Switzerland': 'Switz',
+  }
+
+  function shortenLocation(name) {
+    return LOCATION_ABBREVIATIONS[name] || name
+  }
+
+  /**
+   * What to paint over a cell, or null to leave Torn's own text alone.
+   *
+   * Every branch can decline. An unparseable description, a missing `until`, an
+   * elapsed timer: all return null and the cell keeps saying what it said,
+   * which is the only safe failure for a column people pick targets from.
+   */
+  function enemyStatusText(entry, nowSeconds) {
+    switch (entry.state) {
+      case 'Hospital':
+      case 'Jail': {
+        if (!entry.until) return null
+        const remaining = Math.round(entry.until - nowSeconds)
+        return remaining > 0 ? formatCountdown(remaining) : null
+      }
+
+      case 'Traveling': {
+        // "Traveling from A to B" is the only shape this endpoint returns.
+        // Anything else declines rather than guessing at a phrasing.
+        const match = /^Traveling from (.+?) to (.+)$/.exec(entry.description || '')
+        if (!match) return null
+
+        // Inbound shows where they are coming from, outbound where they are
+        // going: either way it names the end that is not Torn.
+        const [, from, to] = match
+        return to === 'Torn'
+          ? `\u25C4 ${shortenLocation(from)}`
+          : `\u25BA ${shortenLocation(to)}`
+      }
+
+      case 'Abroad': {
+        const match = /^In (.+)$/.exec(entry.description || '')
+        return match ? shortenLocation(match[1]) : null
+      }
+
+      default:
+        return null
+    }
+  }
+
+  function scheduleEnemyStatusRefresh(delayMs = ENEMY_STATUS_REFRESH_MS) {
+    if (enemyStatusRefreshTimeout) {
+      clearTimeout(enemyStatusRefreshTimeout)
+      enemyStatusRefreshTimeout = null
+    }
+
+    if (enemyStatusStopped) return
+    if (!SETTINGS.showEnemyHospitalTimer) return
+
+    enemyStatusRefreshTimeout = setTimeout(() => {
+      enemyStatusRefreshTimeout = null
+      fetchEnemyStatuses()
+    }, delayMs)
+  }
+
+  async function fetchEnemyStatuses() {
+    if (enemyStatusFetchInFlight || enemyStatusStopped) return
+    if (!SETTINGS.showEnemyHospitalTimer) return
+
+    // A hidden tab is not looking at the countdown; re-arm and spend nothing.
+    if (document.hidden) {
+      scheduleEnemyStatusRefresh()
+      return
+    }
+
+    const factionId = getOpponentFactionId()
+    if (!factionId) {
+      // Retry quickly only until the first payload lands - that is the
+      // page-still-rendering case. Once we hold data a missing panel means the
+      // user has navigated away, which is not urgent and must not turn into a
+      // once-a-second loop.
+      scheduleEnemyStatusRefresh(
+        enemyStatusById.size === 0 ? ENEMY_STATUS_RETRY_MS : ENEMY_STATUS_REFRESH_MS
+      )
+      return
+    }
+
+    const apiKey = platform.getApiKey()
+    if (!apiKey || apiKey.includes('PDA-APIKEY')) {
+      // No key configured. Nothing to say about it - the feature simply does
+      // not apply. Still re-armed, so a key pasted into settings afterwards is
+      // picked up without a reload: the settings save only watches the
+      // feature's own switch, not the key.
+      scheduleEnemyStatusRefresh()
+      return
+    }
+
+    enemyStatusFetchInFlight = true
+    let delay = ENEMY_STATUS_REFRESH_MS
+
+    try {
+      const url = `${TORN_API_BASE}/faction/${encodeURIComponent(factionId)}/members`
+        + `?key=${encodeURIComponent(apiKey)}&comment=warroom-userscript`
+
+      const res = await platform.fetch('GET', url)
+      const json = JSON.parse(res.responseText)
+
+      const errorCode = json?.error?.code
+      if (errorCode != null) {
+        if (TORN_FATAL_ERROR_CODES.has(errorCode)) {
+          enemyStatusStopped = true
+          log('EnemyStatus', 'Non-recoverable Torn error, giving up', json.error)
+          toast(`Enemy timers stopped: ${json.error.error || 'Torn API error'}`, 'error')
+          return
+        }
+
+        if (TORN_BACKOFF_ERROR_CODES.has(errorCode)) {
+          delay = ENEMY_STATUS_BACKOFF_MS
+        }
+
+        log('EnemyStatus', 'Torn error, keeping last known statuses', json.error)
+        return
+      }
+
+      // v2 answers with an array carrying id per entry, unlike v1's map.
+      const members = Array.isArray(json?.members) ? json.members : []
+      const next = new Map()
+      for (const member of members) {
+        if (member?.id == null) continue
+        next.set(String(member.id), {
+          state: member.status?.state,
+          until: member.status?.until,
+          description: member.status?.description,
+        })
+      }
+
+      enemyStatusById = next
+      // Paint now rather than waiting up to a second for the next tick: this
+      // is the first thing somebody sees on a fresh load.
+      paintEnemyStatuses()
+      sortEnemyRows()
+      log('EnemyStatus', `Loaded ${next.size} enemy statuses`)
+    } catch (err) {
+      // A blip leaves the last known statuses on screen rather than wiping
+      // every countdown.
+      log('EnemyStatus', 'Fetch failed, keeping last known statuses', err?.message)
+    } finally {
+      enemyStatusFetchInFlight = false
+      // Re-armed from the END of the request, so a call running into the 30s
+      // timeout cannot have two more fired underneath it.
+      scheduleEnemyStatusRefresh(delay)
+    }
+  }
+
+  function clearEnemyStatusOverride(statusDiv) {
+    statusDiv.classList.remove('wr-status-override')
+    statusDiv.style.removeProperty('--wr-status-override')
+  }
+
+  function clearAllEnemyStatusOverrides() {
+    for (const statusDiv of document.querySelectorAll('.enemy-faction .members-list div.status')) {
+      clearEnemyStatusOverride(statusDiv)
+    }
+  }
+
+  function paintEnemyStatuses() {
+    const section = document.querySelector('.enemy-faction')
+    if (!section) return
+
+    const nowSeconds = Date.now() / 1000
+
+    for (const row of section.querySelectorAll('li.enemy')) {
+      const statusDiv = row.querySelector('div.status')
+      if (!statusDiv) continue
+
+      const id = enemyRowUserId(row)
+      const entry = id ? enemyStatusById.get(id) : null
+      const cellState = statusDiv.textContent.trim().toLowerCase()
+
+      // Trust the page over our snapshot. Somebody who medded out, was revived
+      // or has just landed reads "Okay" here while the API answer still says
+      // Hospital or Traveling, and painting over that would be a lie the page
+      // itself contradicts.
+      if (!entry || !ENEMY_OVERRIDDEN_STATES.has(entry.state)
+        || cellState !== entry.state.toLowerCase()) {
+        clearEnemyStatusOverride(statusDiv)
+        continue
+      }
+
+      const text = enemyStatusText(entry, nowSeconds)
+      if (!text) {
+        clearEnemyStatusOverride(statusDiv)
+        continue
+      }
+
+      statusDiv.classList.add('wr-status-override')
+      statusDiv.style.setProperty('--wr-status-override', `"${text}"`)
+    }
+  }
+
+  /**
+   * Where a row belongs when the list is ordered by how soon it can be hit:
+   * Okay, hospital (soonest out first), jail, inbound, abroad, outbound.
+   *
+   * Keyed on the page's own cell text, exactly as paintEnemyStatuses is, so the
+   * two can never disagree about what somebody's state is. That also means
+   * everything but the travel direction ranks correctly with no snapshot at
+   * all - only "which way are they flying" needs the API.
+   */
+  const ENEMY_SORT_RANK = {
+    okay: 0,
+    hospital: 1,
+    jail: 2,
+    inbound: 3,
+    abroad: 4,
+    outbound: 5,
+    other: 6,
+  }
+
+  function enemyRowSortKey(cellState, entry) {
+    // Infinity, not 0: a hospital row we hold no time for belongs at the end of
+    // its own bucket, and a missing value must not make the comparator
+    // intransitive.
+    const until = entry && entry.until ? entry.until : Infinity
+
+    switch (cellState) {
+      case 'okay':
+        // Includes anybody who medded out or was revived - the cell says Okay
+        // while the snapshot still says Hospital, and the cell is right.
+        return { rank: ENEMY_SORT_RANK.okay, until }
+      case 'hospital':
+        return { rank: ENEMY_SORT_RANK.hospital, until }
+      case 'jail':
+        return { rank: ENEMY_SORT_RANK.jail, until }
+      case 'abroad':
+        return { rank: ENEMY_SORT_RANK.abroad, until }
+      case 'traveling': {
+        const match = /^Traveling from (.+?) to (.+)$/.exec(entry?.description || '')
+        if (!match) return { rank: ENEMY_SORT_RANK.other, until }
+        return {
+          rank: match[2] === 'Torn' ? ENEMY_SORT_RANK.inbound : ENEMY_SORT_RANK.outbound,
+          until,
+        }
+      }
+      default:
+        return { rank: ENEMY_SORT_RANK.other, until }
+    }
+  }
+
+  /**
+   * Which way Torn's Status column is sorted, or null when Status is not the
+   * active column - which is the whole of "only takes over when you sort by
+   * status", in one place.
+   *
+   * The header is a SIBLING of ul.members-list, so the lookup is scoped to it:
+   * unscoped, the first `div.status div` in .members-cont is only the header's
+   * by accident of document order, ahead of 98 row cells. Matching is on the
+   * class prefix because the hash suffix changes between Torn deploys, and the
+   * direction class sits on every icon whether active or not - so it is only
+   * read off the one that also carries activeIcon.
+   */
+  function enemyStatusSortDirection(membersCont) {
+    const header = membersCont.querySelector('.white-grad')
+    if (!header) return null
+
+    const icon = header.querySelector('.status div')
+    if (!icon || !/activeIcon__/.test(icon.className)) return null
+
+    return /asc__/.test(icon.className) ? 'asc' : 'desc'
+  }
+
+  function sortEnemyRows() {
+    const membersCont = document.querySelector('.enemy-faction .members-cont')
+    const list = membersCont ? membersCont.querySelector('ul.members-list') : null
+    if (!list) return
+
+    const direction = enemyStatusSortDirection(membersCont)
+    if (!direction) return // Torn owns the order; leave it alone.
+
+    // children, never childNodes: a stray text node would reach the comparator.
+    const rows = Array.from(list.children)
+    if (rows.length < 2) return
+
+    // No clock needed: `until` is an absolute timestamp, so ordering by it
+    // ascending is exactly ordering by remaining time ascending.
+    const keys = new Map()
+    for (const row of rows) {
+      const statusDiv = row.querySelector('div.status')
+      const id = enemyRowUserId(row)
+      keys.set(row, enemyRowSortKey(
+        statusDiv ? statusDiv.textContent.trim().toLowerCase() : '',
+        id ? enemyStatusById.get(id) : null
+      ))
+    }
+
+    // Array.prototype.sort is stable, so rows of equal rank keep the order Torn
+    // gave them - that is "keep the existing order inside each group", for free,
+    // in both directions. Descending reverses the buckets and the hospital
+    // countdown within them; it does not reverse Torn's order inside a group,
+    // because that order is the one thing here nobody asked to invert.
+    const sign = direction === 'asc' ? 1 : -1
+    const sorted = rows.slice().sort((a, b) => {
+      const left = keys.get(a)
+      const right = keys.get(b)
+      if (left.rank !== right.rank) return sign * (left.rank - right.rank)
+
+      // Compared, not subtracted: both are Infinity for every untimed state,
+      // and Infinity - Infinity is NaN. A comparator that returns NaN has
+      // undefined behaviour - V8 happens to treat it as 0, which is why this
+      // looked correct until a full 98-row list was sorted through it.
+      if (left.until === right.until) return 0
+      return sign * (left.until < right.until ? -1 : 1)
+    })
+
+    // Compare before moving. Without this the once-a-second tick re-appends
+    // every row for ever, which throws away hover and tooltip state.
+    let changed = false
+    for (let i = 0; i < sorted.length; i++) {
+      if (list.children[i] !== sorted[i]) {
+        changed = true
+        break
+      }
+    }
+    if (!changed) return
+
+    // appendChild on an attached node MOVES it, so every row keeps its identity,
+    // its listeners and the override class we painted on it. One reflow.
+    const fragment = document.createDocumentFragment()
+    for (const row of sorted) fragment.appendChild(row)
+    list.appendChild(fragment)
+  }
+
+  function enemyStatusTick() {
+    if (document.hidden) return
+    if (!SETTINGS.showEnemyHospitalTimer) return
+
+    // Repainting the whole list every second is what makes this self-healing
+    // against React without a MutationObserver of its own: if a re-render drops
+    // our class, the next tick puts it back.
+    paintEnemyStatuses()
+    sortEnemyRows()
+  }
+
+  function startEnemyStatusTimers() {
+    if (!SETTINGS.showEnemyHospitalTimer) return
+    // Guarded here rather than at each call site: the settings modal opens on
+    // the attack page too, and turning the option on there must not leave a
+    // tick and a re-arm loop running against a page with no enemy panel.
+    if (!isFactionsPage || !window.location.hash.includes('/war/rank')) return
+    if (enemyStatusTickTimer) return
+
+    enemyStatusStopped = false
+    enemyStatusTickTimer = setInterval(enemyStatusTick, ENEMY_STATUS_TICK_MS)
+    enemyStatusTick()
+    fetchEnemyStatuses()
+  }
+
+  function stopEnemyStatusTimers() {
+    if (enemyStatusTickTimer) {
+      clearInterval(enemyStatusTickTimer)
+      enemyStatusTickTimer = null
+    }
+
+    if (enemyStatusRefreshTimeout) {
+      clearTimeout(enemyStatusRefreshTimeout)
+      enemyStatusRefreshTimeout = null
+    }
+
+    clearAllEnemyStatusOverrides()
+    enemyStatusById = new Map()
+  }
+
   // Initialize ranked war enhancement with MutationObserver
   if (isFactionsPage && window.location.search.includes('step=your')) {
     let rankedWarEnhancementInProgress = null
@@ -3219,6 +3714,30 @@
           setTimeout(tryEnhanceRankedWar, 1000)
         }
       })
+    }
+
+    // Enemy timers run beside the ranked war enhancement rather than inside it:
+    // that one needs a zzcraft JWT before it does anything, and this must work
+    // on a Torn key alone. Both loops tolerate a missing .enemy-faction, so
+    // there is nothing to wait for.
+    window.addEventListener('hashchange', () => {
+      if (window.location.hash.includes('/war/rank')) {
+        startEnemyStatusTimers()
+      } else {
+        stopEnemyStatusTimers()
+      }
+    })
+
+    document.addEventListener('visibilitychange', () => {
+      // Coming back to the tab, refresh at once rather than leaving a stale
+      // countdown up until the next re-arm.
+      if (!document.hidden && enemyStatusTickTimer) {
+        fetchEnemyStatuses()
+      }
+    })
+
+    if (window.location.hash.includes('/war/rank')) {
+      startEnemyStatusTimers()
     }
   }
 
@@ -3294,6 +3813,16 @@
       </div>
 
       <div class="wr-setting-group">
+        <div class="wr-setting-toggle" id="wr-toggle-enemyhosp">
+          <span class="wr-toggle-label">Enemy Status Details</span>
+          <div class="wr-toggle-switch ${SETTINGS.showEnemyHospitalTimer ? 'active' : ''}">
+            <div class="wr-toggle-slider"></div>
+          </div>
+        </div>
+        <div class="wr-setting-desc">On the enemy faction in /war/rank: hospital/jail countdowns, travel direction and destination, and where abroad enemies are</div>
+      </div>
+
+      <div class="wr-setting-group">
         <label class="wr-setting-label">Toast Position</label>
         <select class="wr-setting-input" id="wr-toast-position">
           <option value="bottom-left" ${SETTINGS.toastPosition === 'bottom-left' ? 'selected' : ''}>Bottom Left</option>
@@ -3354,6 +3883,11 @@
       toggleMemberStats.querySelector('.wr-toggle-switch').classList.toggle('active')
     })
 
+    const toggleEnemyHosp = modal.querySelector('#wr-toggle-enemyhosp')
+    toggleEnemyHosp.addEventListener('click', () => {
+      toggleEnemyHosp.querySelector('.wr-toggle-switch').classList.toggle('active')
+    })
+
     // Desktop-only toggles
     const toggleLoader = modal.querySelector('#wr-toggle-loader')
     if (toggleLoader) {
@@ -3377,6 +3911,7 @@
         attackFeedEnabled: toggleFeed.querySelector('.wr-toggle-switch').classList.contains('active'),
         autoHideFullAttacks: toggleAutoHide.querySelector('.wr-toggle-switch').classList.contains('active'),
         showMemberStatsOnRankedWar: toggleMemberStats.querySelector('.wr-toggle-switch').classList.contains('active'),
+        showEnemyHospitalTimer: toggleEnemyHosp.querySelector('.wr-toggle-switch').classList.contains('active'),
         buttonPosition: modal.querySelector('#wr-button-position').value,
       }
 
@@ -3388,8 +3923,17 @@
 
       if (saveSettings(newSettings)) {
         const oldFeedEnabled = SETTINGS.attackFeedEnabled
+        const oldEnemyHosp = SETTINGS.showEnemyHospitalTimer
         SETTINGS = newSettings
         overlay.remove()
+
+        if (oldEnemyHosp !== SETTINGS.showEnemyHospitalTimer) {
+          if (SETTINGS.showEnemyHospitalTimer) {
+            startEnemyStatusTimers()
+          } else {
+            stopEnemyStatusTimers()
+          }
+        }
 
         if (oldFeedEnabled !== SETTINGS.attackFeedEnabled) {
           if (SETTINGS.attackFeedEnabled) {
@@ -3599,6 +4143,7 @@
    **********************/
   window.addEventListener('beforeunload', () => {
     hideUsersPanel()
+    stopEnemyStatusTimers()
 
     if (connection) {
       connection.stop()
@@ -3617,7 +4162,7 @@
 
   await initWarRoom(platform)
   console.log(
-            '%c TuRzAm WarRoom Connector v1.3.0 %c Loaded successfully! ',
+            '%c TuRzAm WarRoom Connector v1.4.0 %c Loaded successfully! ',
             'background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px 0 0 4px;',
             'background: #2ecc71; color: white; font-weight: bold; padding: 4px 8px; border-radius: 0 4px 4px 0;'
           )
