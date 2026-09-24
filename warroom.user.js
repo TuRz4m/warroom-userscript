@@ -3,7 +3,7 @@
 // @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.4.0
+// @version      1.4.1
 // @match        https://www.torn.com/page.php?sid=attack*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -25,7 +25,7 @@
    * PLATFORM DETECTION
    **********************/
   const IS_TORN_PDA = typeof window.flutter_inappwebview !== 'undefined'
-  const USER_AGENT = 'warroom-userscript/1.4.0'
+  const USER_AGENT = 'warroom-userscript/1.4.1'
 
   /**********************
    * REQUEST TIMEOUTS
@@ -1615,12 +1615,90 @@
       margin-right: 0.25rem;
     }
 
+    /* Per-member line under each row of the ranked war list. Torn's row is a
+       flex container, so the line claims a whole row of its own. The values
+       sit in pills carrying their own background, because the list is drawn
+       on a light background in Torn's light theme and a dark one in its dark
+       theme - a bare pale value was unreadable on the first. */
+    /* Torn gives each row a fixed height, sized for its own cells. A row we
+       have added a line to is let grow to fit it, rather than the line being
+       squeezed into whatever height is left over and clipped. :has() keeps
+       Torn's own class list untouched, so a React re-render cannot undo it. */
+    .your-faction li.your:has(> .wr-rw-stats-container) {
+      height: auto !important;
+      min-height: 0 !important;
+      overflow: visible !important;
+      flex-wrap: wrap !important;
+      align-content: flex-start !important;
+    }
+
     .wr-rw-stats-container {
-      display: block;
-      background: rgba(155, 89, 182, 0.08);
-      border-top: 1px solid rgba(155, 89, 182, 0.2);
-      padding: 0.4rem 0.75rem;
-      font-size: 0.8rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px;
+      flex: 0 0 100%;
+      width: 100%;
+      box-sizing: border-box;
+      background: none;
+      border: none;
+      padding: 0 6px 4px;
+      font-size: 11px;
+      line-height: 16px;
+    }
+
+    .wr-rw-stats-container .wr-rw-stat {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 3px;
+      margin: 0;
+      padding: 0 6px;
+      border-radius: 8px;
+      font-size: inherit;
+      font-weight: 700;
+      color: #333;
+      background: rgba(0, 0, 0, 0.07);
+      white-space: nowrap;
+    }
+
+    .wr-rw-stats-container .wr-rw-stat-label {
+      margin: 0;
+      color: inherit;
+      font-weight: 400;
+      opacity: 0.75;
+    }
+
+    .wr-rw-stats-container .wr-rw-stat.compliant {
+      color: #1e7e46;
+      background: rgba(46, 204, 113, 0.18);
+    }
+
+    .wr-rw-stats-container .wr-rw-stat.non-compliant {
+      color: #b03a2e;
+      background: rgba(231, 76, 60, 0.16);
+    }
+
+    body.dark-mode .wr-rw-stats-container .wr-rw-stat {
+      color: #ddd;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    body.dark-mode .wr-rw-stats-container .wr-rw-stat.compliant {
+      color: #2ecc71;
+      background: rgba(46, 204, 113, 0.14);
+    }
+
+    body.dark-mode .wr-rw-stats-container .wr-rw-stat.non-compliant {
+      color: #ff6b5b;
+      background: rgba(231, 76, 60, 0.16);
+    }
+
+    /* Long labels only where there is room for them. */
+    .wr-rw-label-short { display: none; }
+
+    @media (max-width: 784px) {
+      .wr-rw-label-long { display: none; }
+      .wr-rw-label-short { display: inline; }
     }
 
     /* Enemy status detail - a countdown, a travel direction, or a country.
@@ -3086,12 +3164,12 @@
     }
 
     const hitsNotAllowedHtml = limits?.noHitsAllowed
-      ? `<span class="wr-rw-stat ${escapeHtml(compliance.hitsNotAllowed)}"><span class="wr-rw-stat-label">Unauthorized Hits:</span>${escapeHtml(String(member.nbHitsNotAllowed ?? 0))}</span>`
+      ? `<span class="wr-rw-stat ${escapeHtml(compliance.hitsNotAllowed)}"><span class="wr-rw-stat-label"><span class="wr-rw-label-long">Unauthorized Hits:</span><span class="wr-rw-label-short">Unauth.</span></span>${escapeHtml(String(member.nbHitsNotAllowed ?? 0))}</span>`
       : ''
 
     const statsHtml = `
-      <span class="wr-rw-stat ${escapeHtml(compliance.hits)}"><span class="wr-rw-stat-label">Number of Hits:</span>${escapeHtml(String(nbWarHits))}</span>
-      <span class="wr-rw-stat ${escapeHtml(compliance.avg)}"><span class="wr-rw-stat-label">Average Respect:</span>${escapeHtml(averageRespect.toFixed(2))}</span>
+      <span class="wr-rw-stat ${escapeHtml(compliance.hits)}"><span class="wr-rw-stat-label"><span class="wr-rw-label-long">Number of Hits:</span><span class="wr-rw-label-short">Hits</span></span>${escapeHtml(String(nbWarHits))}</span>
+      <span class="wr-rw-stat ${escapeHtml(compliance.avg)}"><span class="wr-rw-stat-label"><span class="wr-rw-label-long">Average Respect:</span><span class="wr-rw-label-short">Avg resp.</span></span>${escapeHtml(averageRespect.toFixed(2))}</span>
       ${hitsNotAllowedHtml}
     `
 
@@ -4162,7 +4240,7 @@
 
   await initWarRoom(platform)
   console.log(
-            '%c TuRzAm WarRoom Connector v1.4.0 %c Loaded successfully! ',
+            '%c TuRzAm WarRoom Connector v1.4.1 %c Loaded successfully! ',
             'background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px 0 0 4px;',
             'background: #2ecc71; color: white; font-weight: bold; padding: 4px 8px; border-radius: 0 4px 4px 0;'
           )
