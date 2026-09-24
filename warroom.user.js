@@ -3,7 +3,7 @@
 // @description  Connect to the WarRoom service to receive attack notifications directly within Torn. Enhanced Ranked War stats display.
 // @author       TuRzAm
 // @namespace    https://torn.zzcraft.net/
-// @version      1.4.1
+// @version      1.5.0
 // @match        https://www.torn.com/page.php?sid=attack*
 // @match        https://www.torn.com/factions.php*
 // @grant        GM_xmlhttpRequest
@@ -25,7 +25,7 @@
    * PLATFORM DETECTION
    **********************/
   const IS_TORN_PDA = typeof window.flutter_inappwebview !== 'undefined'
-  const USER_AGENT = 'warroom-userscript/1.4.1'
+  const USER_AGENT = 'warroom-userscript/1.5.0'
 
   /**********************
    * REQUEST TIMEOUTS
@@ -1545,6 +1545,43 @@
       white-space: nowrap;
     }
 
+    .wr-rw-target {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .wr-rw-target-head {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+    }
+
+    .wr-rw-target-value {
+      color: #fff;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .wr-rw-target-track {
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+    }
+
+    .wr-rw-target-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: #9b59b6;
+      transition: width 0.4s ease, background-color 0.4s ease;
+    }
+
+    .wr-rw-target-fill.reached {
+      background: #2ecc71;
+    }
+
     .wr-rw-refresh-btn {
       background: none;
       border: none;
@@ -3004,12 +3041,70 @@
         </svg>`
   }
 
-  function updateLimitsDisplay(container, limits, lastUpdated, onRefresh, members) {
+  /**
+   * Our faction's live war score, as Torn draws it in the war header.
+   *
+   * Read from the page rather than from /rankedwars/last: Torn pushes the score over its own socket,
+   * while the API copy only moves on the faction's next import.
+   */
+  function readOurWarScore() {
+    const el = document.querySelector('.your > .score')
+    if (!el) return null
+    const digits = el.textContent.replace(/[^\d]/g, '')
+    if (!digits) return null
+    const value = Number(digits)
+    return Number.isFinite(value) ? value : null
+  }
+
+  /**
+   * Mirrors formatProgressPercent in TornWeb's ui/src/utils/formatters.ts (and WarTargetProgress.Format
+   * on the Discord card): clamped, and rounded DOWN, so the bar never reads 100% before the target is
+   * actually reached.
+   */
+  function formatProgressPercent(value) {
+    return (Math.floor(Math.min(100, Math.max(0, value)) * 10) / 10).toFixed(1)
+  }
+
+  /** The bar's current reading, or an empty one while Torn has not drawn the score yet. */
+  function describeTargetProgress(targetScore) {
+    const score = readOurWarScore()
+    if (score === null) {
+      return { text: `– / ${targetScore.toLocaleString()}`, width: 0, reached: false }
+    }
+    const percent = formatProgressPercent((score / targetScore) * 100)
+    return {
+      text: `${score.toLocaleString()} / ${targetScore.toLocaleString()} (${percent}%)`,
+      width: Number(percent),
+      reached: score >= targetScore,
+    }
+  }
+
+  function buildTargetProgressHtml(targetScore) {
+    if (!targetScore || targetScore <= 0) return ''
+    const progress = describeTargetProgress(targetScore)
+    return `<div class="wr-rw-target">
+        <div class="wr-rw-target-head"><span class="wr-rw-limits-title">Target:</span><span class="wr-rw-target-value">${escapeHtml(progress.text)}</span></div>
+        <div class="wr-rw-target-track"><div class="wr-rw-target-fill${progress.reached ? ' reached' : ''}" style="width: ${progress.width}%"></div></div>
+      </div>`
+  }
+
+  function refreshTargetProgress(container, targetScore) {
+    const fill = container.querySelector('.wr-rw-target-fill')
+    const value = container.querySelector('.wr-rw-target-value')
+    if (!fill || !value) return
+    const progress = describeTargetProgress(targetScore)
+    value.textContent = progress.text
+    fill.style.width = `${progress.width}%`
+    fill.classList.toggle('reached', progress.reached)
+  }
+
+  function updateLimitsDisplay(container, limits, lastUpdated, onRefresh, members, targetScore) {
     if (!container) return
 
     container._lastLimits = limits
     container._lastUpdated = lastUpdated
     container._lastMembers = members
+    container._lastTargetScore = targetScore
 
     if (container._limitsUpdateInterval) {
       clearInterval(container._limitsUpdateInterval)
@@ -3035,8 +3130,10 @@
       }
     }
 
+    const targetHtml = buildTargetProgressHtml(targetScore)
+
     if (!limits) {
-      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span><span class="wr-rw-limits-label">No active limits</span></div>${myStatsHtml}${updatedHtml}`
+      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span><span class="wr-rw-limits-label">No active limits</span></div>${myStatsHtml}${targetHtml}${updatedHtml}`
     } else {
       const items = []
 
@@ -3066,7 +3163,7 @@
         items.push(`<span class="wr-rw-limits-item"><span class="wr-rw-limits-value" style="color: #e74c3c;">No hits allowed</span></span>`)
       }
 
-      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${myStatsHtml}${updatedHtml}`
+      container.innerHTML = `<div class="wr-rw-limits-content"><span class="wr-rw-limits-title">Limits:</span>${items.length > 0 ? items.join('') : '<span class="wr-rw-limits-label">None defined</span>'}</div>${myStatsHtml}${targetHtml}${updatedHtml}`
     }
 
     if (onRefresh) {
@@ -3096,7 +3193,7 @@
             }
             log('RankedWar', 'Auto-refresh disabled')
             toast('Auto-refresh disabled', 'info')
-            updateLimitsDisplay(container, container._lastLimits, container._lastUpdated, container._onRefresh, container._lastMembers)
+            updateLimitsDisplay(container, container._lastLimits, container._lastUpdated, container._onRefresh, container._lastMembers, container._lastTargetScore)
           } else {
             rankedWarAutoRefreshEnabled = true
             log('RankedWar', 'Auto-refresh re-enabled, triggering refresh')
@@ -3117,30 +3214,34 @@
       }
     }
 
-    if (lastUpdated) {
+    // One tick drives both live readings: the relative time, and the target bar, which follows the
+    // score Torn updates in the header without waiting for the next /last.
+    if (lastUpdated || targetScore) {
       const updateInterval = setInterval(() => {
         if (!container.isConnected) {
           clearInterval(updateInterval)
           return
         }
 
-        const updatedSpan = container.querySelector('.wr-rw-limits-updated')
+        const updatedSpan = lastUpdated ? container.querySelector('.wr-rw-limits-updated') : null
         if (updatedSpan) {
           const newRelativeTime = formatRelativeTime(lastUpdated)
           if (newRelativeTime) {
             updatedSpan.textContent = `Last data update: ${newRelativeTime}`
           }
         }
+
+        if (targetScore) refreshTargetProgress(container, targetScore)
       }, 1000)
 
       container._limitsUpdateInterval = updateInterval
     }
   }
 
-  function createLimitsDisplay(limits, lastUpdated, onRefresh, members) {
+  function createLimitsDisplay(limits, lastUpdated, onRefresh, members, targetScore) {
     const container = document.createElement('div')
     container.className = 'wr-rw-limits'
-    updateLimitsDisplay(container, limits, lastUpdated, onRefresh, members)
+    updateLimitsDisplay(container, limits, lastUpdated, onRefresh, members, targetScore)
     return container
   }
 
@@ -3240,11 +3341,11 @@
     if (factionWarInfo) {
       if (!limitsDisplay) {
         log('RankedWar', 'Creating limits display')
-        limitsDisplay = createLimitsDisplay(statsData.currentLimit, statsData.lastUpdated, refreshStats, statsData.members)
+        limitsDisplay = createLimitsDisplay(statsData.currentLimit, statsData.lastUpdated, refreshStats, statsData.members, statsData.targetScore)
         factionWarInfo.parentNode.insertBefore(limitsDisplay, factionWarInfo.nextSibling)
       } else {
         log('RankedWar', 'Updating existing limits display')
-        updateLimitsDisplay(limitsDisplay, statsData.currentLimit, statsData.lastUpdated, refreshStats, statsData.members)
+        updateLimitsDisplay(limitsDisplay, statsData.currentLimit, statsData.lastUpdated, refreshStats, statsData.members, statsData.targetScore)
       }
     }
 
@@ -4240,7 +4341,7 @@
 
   await initWarRoom(platform)
   console.log(
-            '%c TuRzAm WarRoom Connector v1.4.1 %c Loaded successfully! ',
+            '%c TuRzAm WarRoom Connector v1.5.0 %c Loaded successfully! ',
             'background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%); color: white; font-weight: bold; padding: 4px 8px; border-radius: 4px 0 0 4px;',
             'background: #2ecc71; color: white; font-weight: bold; padding: 4px 8px; border-radius: 0 4px 4px 0;'
           )
